@@ -1,0 +1,66 @@
+services:
+  backend:
+    build: ./backend
+    user: "${PUID:?set PUID in .env}:${PGID:?set PGID in .env}"
+    init: true
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      CYMEDIAFLOW_MEDIA_ROOT: /media
+      CYMEDIAFLOW_ALLOWED_MEDIA_ROOT: /media
+      CYMEDIAFLOW_DATA_DIR: /data
+      CYMEDIAFLOW_BANGUMI_TOKEN_FILE: /run/secrets/bangumi_token.json
+      CYMEDIAFLOW_BANGUMI_USER_AGENT: "${CYMEDIAFLOW_BANGUMI_USER_AGENT:-CyMediaFlow/0.1 (NAS administrator)}"
+      CYMEDIAFLOW_BANGUMI_PROXY_URL: "${CYMEDIAFLOW_BANGUMI_PROXY_URL:-http://192.168.5.124:20181}"
+      CYMEDIAFLOW_TMDB_PROXY_URL: "${CYMEDIAFLOW_TMDB_PROXY_URL:-}"
+      CYMEDIAFLOW_OPERATION_MODE: ${CYMEDIAFLOW_OPERATION_MODE:-nfo_managed_update}
+      CYMEDIAFLOW_FFPROBE_PATH: ffprobe
+      CYMEDIAFLOW_FFPROBE_TIMEOUT_SECONDS: 30
+      CYMEDIAFLOW_FFMPEG_PATH: ffmpeg
+      CYMEDIAFLOW_FFMPEG_TIMEOUT_SECONDS: 60
+      CYMEDIAFLOW_EPISODE_ARTWORK_FALLBACK_ENABLED: "true"
+      CYMEDIAFLOW_EPISODE_ARTWORK_CAPTURE_PERCENT: 25
+      CYMEDIAFLOW_IGNORE_MARKER_ENABLED: "${CYMEDIAFLOW_IGNORE_MARKER_ENABLED:-true}"
+      CYMEDIAFLOW_IGNORE_FOLDER_PATTERNS: "${CYMEDIAFLOW_IGNORE_FOLDER_PATTERNS:-特典映像,映像特典,特典,对话,电话,電話,SP,PV,NCOP,NCED,NCOP&NCED,menu,menus,Fonts}"
+    volumes:
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media:${MEDIA_MOUNT_MODE:-rw}
+      - ${DATA_ROOT:?set DATA_ROOT in .env}:/data
+      - ./access_token.json:/run/secrets/bangumi_token.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build: ./frontend
+    init: true
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${APP_BIND_IP:-0.0.0.0}:${APP_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
