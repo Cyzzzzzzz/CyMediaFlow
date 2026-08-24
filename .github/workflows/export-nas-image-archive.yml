@@ -1,0 +1,48 @@
+name: Export NAS image archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Public GitHub Release tag used for the image archive
+        required: true
+        type: string
+
+# This workflow can read the already-published GHCR packages and publish one
+# public release asset. It cannot modify repository source code.
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    env:
+      BACKEND_IMAGE: ghcr.io/cyzzzzzzz/cymediaflow-backend:main
+      FRONTEND_IMAGE: ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
+      ARCHIVE_NAME: cymediaflow-nas-images.tar.gz
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull published images
+        run: |
+          docker pull "$BACKEND_IMAGE"
+          docker pull "$FRONTEND_IMAGE"
+
+      - name: Create compressed Docker image archive
+        run: |
+          docker save "$BACKEND_IMAGE" "$FRONTEND_IMAGE" | gzip --best > "$ARCHIVE_NAME"
+          sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+
+      - name: Publish archive to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "CyMediaFlow NAS image archive"
+          gh release upload "$RELEASE_TAG" "$ARCHIVE_NAME" "$ARCHIVE_NAME.sha256" --clobber

@@ -255,6 +255,39 @@ CYMEDIAFLOW_FRONTEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
 
 GHCR 容器包需要设为公开，NAS 才能匿名拉取。首次发布后，在 GitHub 仓库主页右侧的 **Packages** 中分别打开 `cymediaflow-backend` 和 `cymediaflow-frontend`，进入 **Package settings**，将 **Package visibility** 设为 **Public**。若因网络策略必须保持私有，则需在 NAS 使用只具备 `read:packages` 权限的 GitHub 凭据先执行 `docker login ghcr.io`；不要把该令牌写入 `.env` 或 Git 仓库。
 
+### 9.1 Docker 守护进程无法访问 GHCR 时：导入发布归档
+
+若 `docker-compose pull` 显示 `Get "https://ghcr.io/v2/": EOF`，说明 Docker 守护进程本身无法连接 GHCR。Docker 命令行的代理变量不能修复该问题；为守护进程设置代理通常需要重启 Docker。无法重启时，使用仓库 **Actions** 页的“Export NAS image archive”工作流，填写一个发布标签（例如 `nas-images-20260825`）。它会将已经发布的后端和前端镜像打包为公开 GitHub Release 附件。
+
+归档发布成功后，通过可工作的 HTTP 代理下载；此步骤由 `curl` 运行在 NAS 宿主机上，不会让 Docker 访问 GHCR：
+
+```bash
+cd /volume2/docker/0016.CyMediaFlow/src
+curl --fail --location --proxy http://192.168.5.124:20181 \
+  --output cymediaflow-nas-images.tar.gz \
+  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz
+curl --fail --location --proxy http://192.168.5.124:20181 \
+  --output cymediaflow-nas-images.tar.gz.sha256 \
+  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz.sha256
+sha256sum -c cymediaflow-nas-images.tar.gz.sha256
+docker load -i cymediaflow-nas-images.tar.gz
+```
+
+然后将 `.env` 的 `CYMEDIAFLOW_IMAGE_PULL_POLICY` 改为 `missing`，防止 `up` 再次尝试远程拉取；其余两个 GHCR 镜像变量保持不变：
+
+```dotenv
+CYMEDIAFLOW_IMAGE_PULL_POLICY=missing
+```
+
+最后启动本地已导入的镜像：
+
+```bash
+docker-compose up -d --no-build --remove-orphans
+docker-compose ps
+```
+
+归档文件已不再需要时可删除；`docker load` 导入的镜像会保留。Docker 可正常访问 GHCR 后，再将该变量恢复为 `always`，并执行 `docker-compose pull` 获取更新。
+
 查看启动日志：
 
 ```bash
