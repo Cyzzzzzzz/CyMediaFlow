@@ -46,14 +46,14 @@ uname -m
 
 ## 3. 将项目放到 NAS
 
-建议目录为 `/volume1/docker/CyMediaFlow`。推荐直接从私有 GitHub 仓库克隆，这样后续升级可使用 `git pull`：
+建议目录为 `/volume1/docker/CyMediaFlow`。推荐直接从 GitHub 仓库克隆，这样后续升级可使用 `git pull`。本仓库会在 `main` 分支发布后自动把后端和前端的 `linux/amd64` 预构建镜像发布到 GitHub Container Registry（GHCR）：
 
 ```bash
-git clone https://github.com/Cyzzzzzzz/CyMediaFlow.git /volume1/docker/CyMediaFlow
-cd /volume1/docker/CyMediaFlow
+git -c http.proxy=http://192.168.5.124:20181 clone https://github.com/Cyzzzzzzz/CyMediaFlow.git /volume2/docker/0016.CyMediaFlow/src
+cd /volume2/docker/0016.CyMediaFlow/src
 ```
 
-私有仓库首次克隆需要 NAS 上的 GitHub 凭据；建议使用注册到 GitHub 账号/仓库的 SSH Deploy Key，或在 NAS 安装 GitHub CLI 后执行 `gh auth login`。不要把个人访问令牌直接写入命令行 URL、`.env` 或部署日志。
+当前仓库为公开仓库，克隆不需要 GitHub 凭据。不要把个人访问令牌直接写入命令行 URL、`.env` 或部署日志。
 
 也可以通过 SMB 复制当前项目，但应在 NAS 中为该目录配置相同的 `origin` 远程仓库，才能采用第 16 节的升级流程。部署目录至少应包含：
 
@@ -163,6 +163,10 @@ CYMEDIAFLOW_BANGUMI_USER_AGENT=CyMediaFlow/0.1 (NAS administrator)
 CYMEDIAFLOW_BANGUMI_PROXY_URL=http://192.168.5.124:20181
 CYMEDIAFLOW_TMDB_PROXY_URL=
 
+CYMEDIAFLOW_IMAGE_PULL_POLICY=always
+CYMEDIAFLOW_BACKEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-backend:main
+CYMEDIAFLOW_FRONTEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
+
 CYMEDIAFLOW_OPERATION_MODE=nfo_managed_update
 CYMEDIAFLOW_IGNORE_MARKER_ENABLED=true
 CYMEDIAFLOW_IGNORE_FOLDER_PATTERNS=特典映像,映像特典,特典,对话,电话,電話,SP,PV,NCOP,NCED,NCOP&NCED,menu,menus,Fonts
@@ -178,6 +182,8 @@ CYMEDIAFLOW_IGNORE_FOLDER_PATTERNS=特典映像,映像特典,特典,对话,电�
 | `DATA_ROOT` | NAS 本地磁盘目录 | 保存数据库和图片代理缓存，不建议放 SMB/NFS 网络盘 |
 | `APP_BIND_IP` | NAS 局域网 IP 或 `0.0.0.0` | NAS 局域网 IP 更收敛；`0.0.0.0` 监听全部接口 |
 | `APP_PORT` | `3000` | 与 NAS 已有服务冲突时改为其他未占用端口 |
+| `CYMEDIAFLOW_IMAGE_PULL_POLICY` | `always` | NAS 使用 GHCR 预构建镜像；本地源码开发可改为 `build` |
+| `CYMEDIAFLOW_BACKEND_IMAGE` / `CYMEDIAFLOW_FRONTEND_IMAGE` | GHCR 默认镜像 | 通常不修改；可固定为 `sha-<提交 SHA>` 回滚到特定发布版本 |
 | `CYMEDIAFLOW_BANGUMI_PROXY_URL` | `http://192.168.5.124:20181` | 当前指定的 Bangumi 默认代理 |
 | `CYMEDIAFLOW_TMDB_PROXY_URL` | 留空或代理地址 | TMDB 是否走代理可单独控制 |
 | `CYMEDIAFLOW_OPERATION_MODE` | `nfo_managed_update` | 允许字段锁保护下覆盖；`nfo_create_only` 仅创建缺失 NFO |
@@ -197,13 +203,13 @@ CYMEDIAFLOW_IGNORE_FOLDER_PATTERNS=特典映像,映像特典,特典,对话,电�
 Windows 数据库可能保存了 `Z:\...` 媒体路径。复制后、正式启动前必须删除这一条动态路径，让容器重新采用 `/media`：
 
 ```bash
-docker-compose build backend
-docker-compose run --rm --no-deps backend python -c 'import sqlite3; db=sqlite3.connect("/data/cymediaflow.db"); db.execute("DELETE FROM app_settings WHERE key = ?", ("media_root",)); db.commit(); db.close()'
+docker-compose pull backend
+docker-compose run --rm --no-deps --no-build backend python -c 'import sqlite3; db=sqlite3.connect("/data/cymediaflow.db"); db.execute("DELETE FROM app_settings WHERE key = ?", ("media_root",)); db.commit(); db.close()'
 ```
 
 不要把 Windows 的 `config.local.json` 放进容器；生产路径全部由 `.env` 和设置页管理。
 
-## 8. 构建前检查
+## 8. 启动前检查
 
 让 Compose 展开并验证配置：
 
@@ -222,15 +228,32 @@ docker-compose config --environment
 
 若 `access_token.json` 不存在，Docker 的短挂载语法可能创建同名目录，随后容器会挂载失败。因此必须在 `docker-compose up` 前创建正确文件。
 
-## 9. 构建并启动
+## 9. 拉取预构建镜像并启动
 
-第一次部署：
+第一次部署和日常升级都不需要在 NAS 上构建镜像。GitHub Actions 会从 `main` 分支构建并发布以下仅适用于 Intel/AMD NAS 的镜像：
+
+- `ghcr.io/cyzzzzzzz/cymediaflow-backend:main`
+- `ghcr.io/cyzzzzzzz/cymediaflow-frontend:main`
+
+确认 GitHub 仓库的 **Actions** 页面中“Publish NAS container images”最近一次运行是绿色成功状态后，执行：
 
 ```bash
-docker-compose build --pull
-docker-compose up -d
+docker-compose pull
+docker-compose up -d --no-build --remove-orphans
 docker-compose ps
 ```
+
+`docker-compose pull` 只会访问 `ghcr.io`，不会下载 `python:3.13-slim`、Node 或 Nginx 的 Docker Hub 基础镜像，因此可以绕开 Docker 守护进程中遗留的 Docker Hub 镜像源。不要在 NAS 上执行 `docker-compose build` 或 `docker-compose build --pull`。
+
+`.env` 中必须保留下列三项（从更新后的 `.env.example` 复制即可）：
+
+```dotenv
+CYMEDIAFLOW_IMAGE_PULL_POLICY=always
+CYMEDIAFLOW_BACKEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-backend:main
+CYMEDIAFLOW_FRONTEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
+```
+
+GHCR 容器包需要设为公开，NAS 才能匿名拉取。首次发布后，在 GitHub 仓库主页右侧的 **Packages** 中分别打开 `cymediaflow-backend` 和 `cymediaflow-frontend`，进入 **Package settings**，将 **Package visibility** 设为 **Public**。若因网络策略必须保持私有，则需在 NAS 使用只具备 `read:packages` 权限的 GitHub 凭据先执行 `docker login ghcr.io`；不要把该令牌写入 `.env` 或 Git 仓库。
 
 查看启动日志：
 
@@ -403,7 +426,7 @@ docker-compose start backend
 
 ## 16. 更新项目
 
-每次新功能发布到 GitHub 的 `main` 分支后，NAS 按下列顺序升级。该流程只更新 Git 跟踪的源码与容器镜像；`.env`、`access_token.json`、`DATA_ROOT`、本地数据库和媒体文件均不受 `git pull` 影响。
+每次新功能发布到 GitHub 的 `main` 分支后，GitHub Actions 会发布新的 GHCR 镜像。确认该工作流显示绿色成功后，NAS 按下列顺序升级。该流程只更新 Git 跟踪的源码与容器镜像；`.env`、`access_token.json`、`DATA_ROOT`、本地数据库和媒体文件均不受 `git pull` 影响。
 
 ```bash
 # 1. 进入部署目录，确认没有意外改动
@@ -420,15 +443,15 @@ git pull --ff-only origin main
 # 4. 查看新版本是否增加或修改了部署变量
 git diff HEAD@{1} HEAD -- .env.example compose.yaml
 
-# 5. 按需手动补充 .env，随后验证并重建容器
+# 5. 按需手动补充 .env；拉取已构建好的 GHCR 镜像并重建容器
 docker-compose config
-docker-compose build --pull
-docker-compose up -d --remove-orphans
+docker-compose pull
+docker-compose up -d --no-build --remove-orphans
 docker-compose ps
 curl http://127.0.0.1:3000/api/v1/system/health
 ```
 
-如果第 4 步显示 `.env.example` 或 `compose.yaml` 有变化，先按差异手动更新 NAS 的 `.env`；不要执行 `git checkout .env`，因为 `.env` 不应由 Git 管理。`git pull --ff-only` 在本地源码被手工修改或历史分叉时会拒绝继续，这正是预期保护：先检查 `git status` 与差异，再决定保留或迁移手工修改。
+如果第 4 步显示 `.env.example` 或 `compose.yaml` 有变化，先按差异手动更新 NAS 的 `.env`；不要执行 `git checkout .env`，因为 `.env` 不应由 Git 管理。`git pull --ff-only` 在本地源码被手工修改或历史分叉时会拒绝继续，这正是预期保护：先检查 `git status` 与差异，再决定保留或迁移手工修改。升级中绝不要改用 `docker-compose build`，否则 Docker 会再次向 Docker Hub 镜像源请求基础镜像。
 
 若 NAS 是通过 SMB 复制代码而非 Git 克隆，可在首次升级前关联远程仓库：
 
