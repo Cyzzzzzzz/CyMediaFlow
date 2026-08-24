@@ -1123,3 +1123,9 @@ GET  /api/v1/events/stream
 
 - 目标 NAS 已确认 Docker Engine 为 `24.0.2`、架构为 `linux/amd64`，并安装 `docker-compose v2.20.1` 独立命令；这同样是 Compose V2，与项目配置兼容。
 - 部署文档已统一使用该 NAS 实际可用的 `docker-compose` 命令；如果后续环境仅提供 `docker compose` 子命令，可直接替换命令前缀，参数保持一致。
+
+### GitHub 升级流程
+
+- 远程私有仓库已创建为 `https://github.com/Cyzzzzzzz/CyMediaFlow`，默认分支为 `main`；首次部署可直接克隆该仓库。
+- 文档升级步骤改为 `git fetch`、预览待合并提交、数据库备份、`git pull --ff-only`、检查 `.env.example`/`compose.yaml` 差异、验证 Compose 并重建容器。
+- `.env`、Token、SQLite 数据库、缓存和媒体文件均不被 Git 跟踪；升级时保留。若 NAS 源码目录存在手工改动，`--ff-only` 会拒绝合并，要求先人工检查，避免静默覆盖。

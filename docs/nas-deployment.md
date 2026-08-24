@@ -46,7 +46,16 @@ uname -m
 
 ## 3. 将项目放到 NAS
 
-建议目录为 `/volume1/docker/CyMediaFlow`。可以通过 SMB 复制当前项目，也可以从自己的 Git 仓库克隆。部署目录至少应包含：
+建议目录为 `/volume1/docker/CyMediaFlow`。推荐直接从私有 GitHub 仓库克隆，这样后续升级可使用 `git pull`：
+
+```bash
+git clone https://github.com/Cyzzzzzzz/CyMediaFlow.git /volume1/docker/CyMediaFlow
+cd /volume1/docker/CyMediaFlow
+```
+
+私有仓库首次克隆需要 NAS 上的 GitHub 凭据；建议使用注册到 GitHub 账号/仓库的 SSH Deploy Key，或在 NAS 安装 GitHub CLI 后执行 `gh auth login`。不要把个人访问令牌直接写入命令行 URL、`.env` 或部署日志。
+
+也可以通过 SMB 复制当前项目，但应在 NAS 中为该目录配置相同的 `origin` 远程仓库，才能采用第 16 节的升级流程。部署目录至少应包含：
 
 ```text
 CyMediaFlow/
@@ -394,14 +403,43 @@ docker-compose start backend
 
 ## 16. 更新项目
 
-更新前先备份数据库，然后替换项目源码。不要覆盖 NAS 上的 `.env`、`access_token.json` 和 `DATA_ROOT`。
+每次新功能发布到 GitHub 的 `main` 分支后，NAS 按下列顺序升级。该流程只更新 Git 跟踪的源码与容器镜像；`.env`、`access_token.json`、`DATA_ROOT`、本地数据库和媒体文件均不受 `git pull` 影响。
 
 ```bash
+# 1. 进入部署目录，确认没有意外改动
+cd /volume1/docker/CyMediaFlow
+git status --short
+
+# 2. 查看待更新的提交；确认后才合并
+git fetch origin
+git log --oneline HEAD..origin/main
+
+# 3. 先备份数据库（见第 15 节），再快进更新源码
+git pull --ff-only origin main
+
+# 4. 查看新版本是否增加或修改了部署变量
+git diff HEAD@{1} HEAD -- .env.example compose.yaml
+
+# 5. 按需手动补充 .env，随后验证并重建容器
+docker-compose config
 docker-compose build --pull
 docker-compose up -d --remove-orphans
 docker-compose ps
 curl http://127.0.0.1:3000/api/v1/system/health
 ```
+
+如果第 4 步显示 `.env.example` 或 `compose.yaml` 有变化，先按差异手动更新 NAS 的 `.env`；不要执行 `git checkout .env`，因为 `.env` 不应由 Git 管理。`git pull --ff-only` 在本地源码被手工修改或历史分叉时会拒绝继续，这正是预期保护：先检查 `git status` 与差异，再决定保留或迁移手工修改。
+
+若 NAS 是通过 SMB 复制代码而非 Git 克隆，可在首次升级前关联远程仓库：
+
+```bash
+cd /volume1/docker/CyMediaFlow
+git init -b main
+git remote add origin https://github.com/Cyzzzzzzz/CyMediaFlow.git
+git fetch origin
+```
+
+如果该目录已有未提交代码，不要直接执行上述命令；应先备份该目录并对比远程内容，避免覆盖 NAS 上的手工改动。
 
 更新后检查：
 
