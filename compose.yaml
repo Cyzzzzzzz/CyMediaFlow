@@ -1,6 +1,8 @@
 services:
   backend:
+    image: ${CYMEDIAFLOW_BACKEND_IMAGE:-ghcr.io/cyzzzzzzz/cymediaflow-backend:main}
     build: ./backend
+    pull_policy: ${CYMEDIAFLOW_IMAGE_PULL_POLICY:-build}
     user: "${PUID:?set PUID in .env}:${PGID:?set PGID in .env}"
     init: true
     restart: unless-stopped
@@ -42,7 +44,9 @@ services:
         max-file: "3"
 
   frontend:
+    image: ${CYMEDIAFLOW_FRONTEND_IMAGE:-ghcr.io/cyzzzzzzz/cymediaflow-frontend:main}
     build: ./frontend
+    pull_policy: ${CYMEDIAFLOW_IMAGE_PULL_POLICY:-build}
     init: true
     restart: unless-stopped
     depends_on:
