@@ -50,4 +50,27 @@ describe("NfoPreviewPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消本文件夹" }));
     expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], []);
   });
+
+  it("allows an existing sidecar to be selected for managed update", () => {
+    const existing = {
+      ...preview,
+      total: 1,
+      create_count: 0,
+      unchanged_count: 1,
+      review_count: 0,
+      default_skipped_count: 0,
+      entries: [{
+        ...preview.entries[0],
+        source_nfo_relative_path: "raw/[Group][Show][01].nfo",
+        source_nfo_name: "[Group][Show][01].nfo",
+        action: "unchanged" as const,
+      }],
+    };
+    render(<NfoPreviewPanel preview={existing} loading={false} error={false} excludedPaths={[]} includedPaths={[]} onSelectionChange={vi.fn()} onRefresh={vi.fn()} />);
+
+    const checkbox = screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" });
+    expect((checkbox as HTMLInputElement).disabled).toBe(false);
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("待更新")).toBeTruthy();
+  });
 });

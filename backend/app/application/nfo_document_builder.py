@@ -17,7 +17,7 @@ from app.domain.media_probe import MediaFileInfo, MediaStreamInfo
 class NfoDocumentBuilder:
     def series(self, subject: MetadataCandidate, episodes: tuple[ProviderEpisode, ...]) -> str:
         root = ET.Element("tvshow")
-        self._subject_fields(root, subject, episodes)
+        self._subject_fields(root, subject, episodes, include_emby_people=True)
         self._text(root, "season", -1)
         self._text(root, "episode", -1)
         self._text(root, "displayorder", "aired")
@@ -30,7 +30,10 @@ class NfoDocumentBuilder:
         season_number: int,
     ) -> str:
         root = ET.Element("season")
-        self._subject_fields(root, subject, episodes)
+        # Emby can aggregate people from both tvshow.nfo and season.nfo. Keep the
+        # complete provider payload below, but only expose top-level Emby people
+        # on the series document so the same cast and crew are not imported twice.
+        self._subject_fields(root, subject, episodes, include_emby_people=False)
         season_image_url = next(
             (episode.season_image_url for episode in episodes if episode.season_image_url),
             None,
@@ -89,6 +92,8 @@ class NfoDocumentBuilder:
         root: ET.Element,
         subject: MetadataCandidate,
         episodes: tuple[ProviderEpisode, ...],
+        *,
+        include_emby_people: bool,
     ) -> None:
         self._text(root, "plot", subject.summary)
         self._text(root, "outline", subject.summary)
@@ -118,7 +123,8 @@ class NfoDocumentBuilder:
             self._text(root, "tag", tag)
         for studio in self._infobox_values(subject.infobox, {"动画制作", "制作", "製作"}):
             self._text(root, "studio", studio)
-        self._staff_fields(root, subject)
+        if include_emby_people:
+            self._staff_fields(root, subject)
         self._unique_id(root, subject.provider, subject.external_id, default=True)
         self._text(root, f"{subject.provider}id", subject.external_id)
         self._text(root, "id", subject.external_id)

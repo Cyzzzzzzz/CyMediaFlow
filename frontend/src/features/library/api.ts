@@ -1,8 +1,13 @@
 import { apiRequest } from "../../api/client";
 import type { LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode } from "../../api/types";
 
+export type LibrarySort = "added_desc" | "name_asc";
+
 export const libraryApi = {
-  list: (search = "") => apiRequest<MediaItem[]>(`/api/v1/media?include_suggestions=true&q=${encodeURIComponent(search)}`),
+  list: (search = "", sort: LibrarySort = "added_desc") => {
+    const params = new URLSearchParams({ include_suggestions: "true", q: search, sort });
+    return apiRequest<MediaItem[]>(`/api/v1/media?${params.toString()}`);
+  },
   candidates: (id: string, query: string, provider: "bangumi" | "tmdb") => apiRequest<MetadataCandidate[]>(`/api/v1/media/${id}/metadata/search`, { method: "POST", body: JSON.stringify({ query, provider }) }),
   metadataDetail: (id: string, externalId: string, provider: "bangumi" | "tmdb") => apiRequest<MetadataCandidate>(`/api/v1/media/${id}/metadata/detail`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider }) }),
   metadataEpisodes: (id: string, externalId: string, provider: "bangumi" | "tmdb", seasonNumber: number) => apiRequest<ProviderEpisode[]>(`/api/v1/media/${id}/metadata/episodes`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider, season_number: seasonNumber }) }),
@@ -28,6 +33,11 @@ export const libraryApi = {
       body: JSON.stringify({
         season_number: binding.season_number,
         episode_offset: binding.episode_offset,
+        episode_mapping_mode: episodeMappingMode(binding),
+        local_episode_number: metadataInteger(binding, "nfo_local_episode_number", 1),
+        provider_episode_number: metadataInteger(binding, "nfo_provider_episode_number", 1),
+        local_episode_offset: metadataInteger(binding, "nfo_local_episode_offset", 0),
+        overwrite_existing: true,
         bangumi_id: provider === "tmdb" ? binding.tmdb_id : binding.bangumi_id,
         bangumi_episode_count: typeof episodeCount === "number" ? episodeCount : null,
       }),
@@ -42,6 +52,10 @@ export const libraryApi = {
       tmdb_id: binding.tmdb_id || (provider === "tmdb" ? fallbackId : null),
       season_number: binding.season_number,
       episode_offset: binding.episode_offset,
+      episode_mapping_mode: episodeMappingMode(binding),
+      local_episode_number: metadataInteger(binding, "nfo_local_episode_number", 1),
+      provider_episode_number: metadataInteger(binding, "nfo_provider_episode_number", 1),
+      local_episode_offset: metadataInteger(binding, "nfo_local_episode_offset", 0),
       excluded_paths: stringList(binding.metadata.nfo_excluded_paths),
       included_paths: stringList(binding.metadata.nfo_included_paths),
       overwrite_existing: true,
@@ -57,4 +71,14 @@ function stringList(value: unknown): string[] {
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function episodeMappingMode(binding: MediaBinding): "auto" | "manual" | "single" {
+  const value = binding.metadata.nfo_episode_mapping_mode;
+  return value === "manual" || value === "single" ? value : "auto";
+}
+
+function metadataInteger(binding: MediaBinding, key: string, fallback: number): number {
+  const value = binding.metadata[key];
+  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
 }

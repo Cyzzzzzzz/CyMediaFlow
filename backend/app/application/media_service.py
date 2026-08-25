@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 from app.application.ports import (
     BindingRepositoryPort,
@@ -36,6 +37,7 @@ class MediaLibraryService:
         self,
         query: str | None = None,
         include_suggestions: bool = True,
+        sort: Literal["added_desc", "name_asc"] = "added_desc",
     ) -> list[tuple[MediaItem, ScrapeBinding | None, str | None]]:
         items = self._catalog.list_media()
         bindings = self._bindings.list_all()
@@ -44,8 +46,24 @@ class MediaLibraryService:
             items = [
                 item
                 for item in items
-                if needle in item.title.casefold() or needle in item.folder_name.casefold()
+                if needle in self._display_title(item, bindings.get(item.id)).casefold()
+                or needle in item.folder_name.casefold()
             ]
+
+        if sort == "name_asc":
+            items.sort(
+                key=lambda item: (
+                    self._display_title(item, bindings.get(item.id)).casefold(),
+                    item.folder_name.casefold(),
+                )
+            )
+        else:
+            items.sort(
+                key=lambda item: (
+                    -item.added_at.timestamp(),
+                    self._display_title(item, bindings.get(item.id)).casefold(),
+                )
+            )
 
         suggestions: dict[str, str | None] = {}
         suggestion_provider = next(
@@ -76,6 +94,10 @@ class MediaLibraryService:
             suggestions = dict(await asyncio.gather(*(suggest(item) for item in unmatched)))
 
         return [(item, bindings.get(item.id), suggestions.get(item.id)) for item in items]
+
+    @staticmethod
+    def _display_title(item: MediaItem, binding: ScrapeBinding | None) -> str:
+        return binding.preferred_title if binding and binding.preferred_title else item.title
 
     def get_media(self, media_id: str) -> tuple[MediaItem, ScrapeBinding | None]:
         item = self._catalog.get_media(media_id)

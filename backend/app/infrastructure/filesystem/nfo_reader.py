@@ -129,7 +129,7 @@ class FileSystemNfoCatalog:
             premiered=(self._text(root, "premiered") or self._text(root, "releasedate"))
             if root is not None
             else None,
-            cast=self._cast(root) if root is not None else (),
+            cast=(self._cast(root) or self._provider_cast(root)) if root is not None else (),
             external_ids=self._identities(root) if root is not None else (),
             artwork=self._artwork_references(root) if root is not None else (),
             provider_data=self._xml_children(root, {"bangumi", "tmdb"})
@@ -323,6 +323,18 @@ class FileSystemNfoCatalog:
             if (actor.findtext("type") or "Actor").casefold() == "actor"
             and (name := cls._node_text(actor.find("name")))
         )
+
+    @classmethod
+    def _provider_cast(cls, root: ET.Element) -> tuple[str, ...]:
+        names: dict[str, None] = {}
+        for provider_name in ("bangumi", "tmdb"):
+            for actor in root.findall(
+                f"./{provider_name}/characters/character/voiceactor"
+            ):
+                name = cls._node_text(actor.find("name")) or (actor.text or "").strip()
+                if name:
+                    names.setdefault(name, None)
+        return tuple(names)
 
     @staticmethod
     def _xml_child(root: ET.Element, tag: str) -> str | None:

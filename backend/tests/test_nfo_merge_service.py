@@ -126,6 +126,42 @@ def test_scoped_season_manual_values_replace_editable_groups() -> None:
     assert root.findtext("tmdb/id") == "200"
 
 
+def test_unlocked_season_people_are_removed_when_generated_document_omits_them() -> None:
+    existing = """<season><title>旧季度</title><seasonnumber>3</seasonnumber>
+<actor><name>旧演员</name></actor><director>旧导演</director>
+<writer>旧编剧</writer><credits>旧编剧</credits></season>"""
+    generated = """<season><title>新季度</title><seasonnumber>3</seasonnumber>
+<bangumi><persons><person><name>完整人员</name></person></persons></bangumi></season>"""
+
+    result = NfoDocumentMerger().merge(
+        existing,
+        generated,
+        level="season",
+        locked_fields=(),
+        manual_values={},
+    )
+    root = ET.fromstring(result)
+
+    assert root.findall("actor") == []
+    assert root.findall("director") == []
+    assert root.findall("writer") == []
+    assert root.findall("credits") == []
+    assert root.findtext("bangumi/persons/person/name") == "完整人员"
+
+
+def test_locked_season_cast_is_preserved_when_generated_document_omits_people() -> None:
+    result = NfoDocumentMerger().merge(
+        """<season><title>旧季度</title><seasonnumber>3</seasonnumber>
+<actor><name>锁定演员</name><type>Actor</type></actor></season>""",
+        "<season><title>新季度</title><seasonnumber>3</seasonnumber></season>",
+        level="season",
+        locked_fields=("season.cast@3",),
+        manual_values={},
+    )
+
+    assert ET.fromstring(result).findtext("actor/name") == "锁定演员"
+
+
 def test_scoped_episode_manual_values_write_title_ids_artwork_and_fileinfo() -> None:
     existing = """<episodedetails><title>旧分集</title><season>1</season><episode>3</episode>
 <uniqueid type="tmdb">30</uniqueid><thumb>old.jpg</thumb>

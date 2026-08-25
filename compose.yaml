@@ -1,7 +1,12 @@
 services:
   backend:
     image: ${CYMEDIAFLOW_BACKEND_IMAGE:-ghcr.io/cyzzzzzzz/cymediaflow-backend:main}
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        HTTP_PROXY: ${CYMEDIAFLOW_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${CYMEDIAFLOW_BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${CYMEDIAFLOW_BUILD_NO_PROXY:-localhost,127.0.0.1,backend,frontend}
     pull_policy: ${CYMEDIAFLOW_IMAGE_PULL_POLICY:-build}
     user: "${PUID:?set PUID in .env}:${PGID:?set PGID in .env}"
     init: true
@@ -45,7 +50,12 @@ services:
 
   frontend:
     image: ${CYMEDIAFLOW_FRONTEND_IMAGE:-ghcr.io/cyzzzzzzz/cymediaflow-frontend:main}
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        HTTP_PROXY: ${CYMEDIAFLOW_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${CYMEDIAFLOW_BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${CYMEDIAFLOW_BUILD_NO_PROXY:-localhost,127.0.0.1,backend,frontend}
     pull_policy: ${CYMEDIAFLOW_IMAGE_PULL_POLICY:-build}
     init: true
     restart: unless-stopped

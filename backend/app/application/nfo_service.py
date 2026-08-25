@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.application.ports import BindingRepositoryPort, MediaCatalogPort
 from app.core.errors import MediaNotFoundError
+from app.domain.episode_mapping import resolve_episode_mapping
 from app.domain.filename import ParsedMediaInfo
 from app.domain.filename_parser import FilenameParser
 from app.domain.media_classification import classify_media
@@ -30,6 +31,11 @@ class NfoPreviewService:
         *,
         season_number: int | None = None,
         episode_offset: int | None = None,
+        episode_mapping_mode: str | None = None,
+        local_episode_number: int | None = None,
+        provider_episode_number: int | None = None,
+        local_episode_offset: int | None = None,
+        overwrite_existing: bool = False,
         bangumi_id: str | None = None,
         bangumi_episode_count: int | None = None,
     ) -> NfoPreview:
@@ -47,6 +53,13 @@ class NfoPreviewService:
             if episode_offset is not None
             else (binding.episode_offset if binding else 0)
         )
+        mapping = resolve_episode_mapping(
+            mode=episode_mapping_mode,
+            local_episode_number=local_episode_number,
+            provider_episode_number=provider_episode_number,
+            local_episode_offset=local_episode_offset,
+            metadata=binding.metadata if binding else None,
+        )
         effective_bangumi_id = bangumi_id or (binding.bangumi_id if binding else None)
         effective_episode_count = self._episode_count(
             bangumi_episode_count,
@@ -63,10 +76,27 @@ class NfoPreviewService:
             )
             for path in videos
         ]
+        regular_video_count = sum(
+            classify_media(relative, parsed) == "regular"
+            for _, relative, parsed in parsed_videos
+        )
+        single_mapping_valid = mapping.is_single and regular_video_count == 1
         video_episode_counts = Counter(
             key
             for _, relative, parsed in parsed_videos
-            if (key := self._episode_key(relative, parsed, configured_season, offset)) is not None
+            if (
+                key := self._episode_key(
+                    relative,
+                    parsed,
+                    configured_season,
+                    offset,
+                    season_override=configured_season if single_mapping_valid else None,
+                    episode_override=(
+                        mapping.provider_episode_number if single_mapping_valid else None
+                    ),
+                )
+            )
+            is not None
         )
         nfo_by_path = {
             path.relative_to(item.root_path).as_posix().casefold(): path for path in nfo_files
@@ -102,7 +132,16 @@ class NfoPreviewService:
 
             source_nfo: Path | None = nfo_by_path.get(target_key)
             candidates: list[Path] = []
-            episode_key = self._episode_key(relative, parsed, configured_season, offset)
+            episode_key = self._episode_key(
+                relative,
+                parsed,
+                configured_season,
+                offset,
+                season_override=configured_season if single_mapping_valid else None,
+                episode_override=(
+                    mapping.provider_episode_number if single_mapping_valid else None
+                ),
+            )
             if source_nfo is not None:
                 action = "unchanged"
             elif target_counts[target_key] > 1:
@@ -123,12 +162,21 @@ class NfoPreviewService:
                     action = "create"
 
             mapped_episode = episode_key[2] if episode_key else None
+            parsed_local_episode = parsed.episode_start or parsed.absolute_episode_start
+            invalid_local_episode = (
+                mapping.adjusts_local_episode
+                and parsed_local_episode is not None
+                and parsed_local_episode + mapping.local_episode_offset < 1
+            )
             selection_reason = self._selection_reason(
                 action=action,
                 category=category,
                 bangumi_id=effective_bangumi_id,
                 mapped_episode=mapped_episode,
                 bangumi_episode_count=effective_episode_count,
+                invalid_single_mapping=mapping.is_single and not single_mapping_valid,
+                overwrite_existing=overwrite_existing,
+                invalid_local_episode=invalid_local_episode,
             )
             if selection_reason and selection_reason not in warnings:
                 warnings.append(selection_reason)
@@ -146,7 +194,11 @@ class NfoPreviewService:
                     action=action,
                     folder=relative.parent.as_posix(),
                     category=category,
-                    default_selected=action in {"create", "rename"} and selection_reason is None,
+                    default_selected=(
+                        action in {"create", "rename"}
+                        or (overwrite_existing and action == "unchanged")
+                    )
+                    and selection_reason is None,
                     selection_reason=selection_reason,
                     parsed=parsed,
                     warnings=tuple(warnings),
@@ -175,7 +227,13 @@ class NfoPreviewService:
         parsed: ParsedMediaInfo,
         configured_season: int,
         offset: int,
+        *,
+        season_override: int | None = None,
+        episode_override: int | None = None,
     ) -> tuple[str, int, int] | None:
+        if episode_override is not None:
+            season = season_override if season_override is not None else configured_season
+            return relative_path.parent.as_posix().casefold(), season, episode_override
         episode = parsed.episode_start or parsed.absolute_episode_start
         if episode is None:
             return None
@@ -198,10 +256,19 @@ class NfoPreviewService:
         bangumi_id: str | None,
         mapped_episode: int | None,
         bangumi_episode_count: int | None,
+        invalid_single_mapping: bool = False,
+        overwrite_existing: bool = False,
+        invalid_local_episode: bool = False,
     ) -> str | None:
+        if invalid_single_mapping:
+            return "SINGLE_EPISODE_MAPPING_REQUIRES_ONE_VIDEO"
+        if invalid_local_episode:
+            return "INVALID_LOCAL_EPISODE_NUMBER"
         if action == "conflict":
             return "TARGET_NFO_CONFLICT"
-        if action not in {"create", "rename"}:
+        if action == "unchanged" and not overwrite_existing:
+            return "NFO_ACTION_NOT_REQUIRED"
+        if action not in {"create", "rename", "unchanged"}:
             return "NFO_ACTION_NOT_REQUIRED"
         if category != "regular":
             return "NON_BANGUMI_CONTENT"

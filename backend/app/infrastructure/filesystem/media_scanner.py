@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.domain.media import ExternalIdentity, MediaItem
@@ -89,6 +90,7 @@ class FileSystemMediaCatalog:
             title=title,
             year=year,
             root_path=directory,
+            added_at=datetime.fromtimestamp(directory.stat().st_mtime, timezone.utc),
             poster_path=poster,
             video_count=len(videos),
             seasons=seasons,

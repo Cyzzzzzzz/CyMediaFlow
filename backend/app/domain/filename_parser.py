@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.domain.filename import FileRole, ParsedMediaInfo, ParseTraceStep
@@ -179,7 +179,7 @@ class FilenameParser:
         year_match = YEAR.search(match_text)
         if year_match:
             candidate_year = int(year_match.group("year"))
-            if 1900 <= candidate_year <= datetime.now(UTC).year + 1:
+            if 1900 <= candidate_year <= datetime.now(timezone.utc).year + 1:
                 year = candidate_year
 
         segments = BRACKET.findall(match_text)

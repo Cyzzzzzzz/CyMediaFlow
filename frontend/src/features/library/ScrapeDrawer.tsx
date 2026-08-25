@@ -30,6 +30,10 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const [detailId, setDetailId] = useState<string | null>(initialProvider === "tmdb" ? (item.binding?.tmdb_id ?? nfoTmdbId) : (item.binding?.bangumi_id ?? nfoBangumiId));
   const effectiveExternalId = provider === "tmdb" ? (form.tmdb_id || nfoTmdbId) : (form.bangumi_id || nfoBangumiId);
   const providerSeasonNumber = provider === "tmdb" ? numberValue(form.metadata.tmdb_season_number, form.season_number) : form.season_number;
+  const episodeMappingMode = mappingMode(form.metadata.nfo_episode_mapping_mode);
+  const localEpisodeNumber = numberValue(form.metadata.nfo_local_episode_number, 1);
+  const providerEpisodeNumber = numberValue(form.metadata.nfo_provider_episode_number, 1);
+  const localEpisodeOffset = numberValue(form.metadata.nfo_local_episode_offset, 0);
   const binding = useQuery({ queryKey: ["binding", item.id], queryFn: () => libraryApi.binding(item.id) });
   const candidates = useQuery({ queryKey: ["candidates", item.id, submittedQuery, provider], queryFn: () => libraryApi.candidates(item.id, submittedQuery, provider), enabled: !!submittedQuery.trim(), retry: false });
   const metadataDetail = useQuery({
@@ -51,7 +55,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
     retry: false,
   });
   const nfoPreview = useQuery({
-    queryKey: ["nfo-preview", item.id],
+    queryKey: ["nfo-preview", item.id, form.season_number, form.episode_offset, episodeMappingMode, localEpisodeNumber, providerEpisodeNumber, localEpisodeOffset, effectiveExternalId],
     queryFn: () => libraryApi.nfoPreview(item.id, form),
     enabled: openSection === "nfo",
     retry: false,
@@ -214,12 +218,22 @@ export function ScrapeDrawer({ item, onClose }: Props) {
             }))}
           />
         </Accordion>
-        <Accordion icon={<ListNumbers size={21} />} title="季集映射" summary={`第 ${form.season_number} 季 · 偏移 ${form.episode_offset}`} open={openSection === "season"} onToggle={() => setOpenSection("season")}>
+        <Accordion icon={<ListNumbers size={21} />} title="季集映射" summary={mappingSummary(episodeMappingMode, form.season_number, form.episode_offset, localEpisodeNumber, localEpisodeOffset)} open={openSection === "season"} onToggle={() => setOpenSection("season")}>
           <div className="field-grid two-columns">
-            <Field label="季编号"><input type="number" min="0" value={form.season_number} onChange={(e) => setForm({ ...form, season_number: Number(e.target.value) })} /></Field>
+            <Field label="映射模式"><select value={episodeMappingMode} onChange={(e) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_episode_mapping_mode: e.target.value } }))}><option value="auto">自动识别（原模式）</option><option value="manual">常规番剧手动映射</option><option value="single">单文件剧场版/特别篇</option></select></Field>
+            <Field label="Emby 季号"><input type="number" min="0" value={form.season_number} onChange={(e) => setForm({ ...form, season_number: Number(e.target.value) })} /></Field>
             {provider === "tmdb" ? <Field label="TMDB 季号"><input type="number" min="0" value={providerSeasonNumber} onChange={(e) => setForm((current) => ({ ...current, metadata: { ...current.metadata, tmdb_season_number: Number(e.target.value) } }))} /></Field> : null}
-            <Field label="集数偏移"><input type="number" value={form.episode_offset} onChange={(e) => setForm({ ...form, episode_offset: Number(e.target.value) })} /></Field>
+            {episodeMappingMode === "single" ? <>
+              <Field label="Emby 集号"><input type="number" min="1" value={localEpisodeNumber} onChange={(e) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_local_episode_number: Number(e.target.value) } }))} /></Field>
+              <Field label={`${provider === "tmdb" ? "TMDB" : "Bangumi"} 元数据集号`}><input type="number" min="1" value={providerEpisodeNumber} onChange={(e) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_provider_episode_number: Number(e.target.value) } }))} /></Field>
+            </> : episodeMappingMode === "manual" ? <>
+              <Field label="Emby 集数偏移"><input type="number" value={localEpisodeOffset} onChange={(e) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_local_episode_offset: Number(e.target.value) } }))} /></Field>
+              <Field label={`${provider === "tmdb" ? "TMDB" : "Bangumi"} 元数据偏移`}><input type="number" value={form.episode_offset} onChange={(e) => setForm({ ...form, episode_offset: Number(e.target.value) })} /></Field>
+            </> : <Field label="集数偏移"><input type="number" value={form.episode_offset} onChange={(e) => setForm({ ...form, episode_offset: Number(e.target.value) })} /></Field>}
           </div>
+          {episodeMappingMode === "single" ? <p className="notice">适用于目录中只有一个正片视频的剧场版或特别篇。Emby 通常把特别篇放在第 0 季；重新刮削会按这里的 S{pad(form.season_number)}E{pad(localEpisodeNumber)} 覆盖已有 NFO 的季集编号。</p> : null}
+          {episodeMappingMode === "manual" ? <p className="notice">适用于需要修正季集编号的正常番剧。Emby 季号会直接写入 NFO；两个集数偏移分别调整 Emby 展示集号和元数据匹配集号。例如文件从 E13 开始但应显示为 E01，两项都填写 -12。</p> : null}
+          {episodeMappingMode === "auto" ? <p className="notice">保留原有自动识别逻辑：从文件名识别集号，使用季号和集数偏移匹配远程元数据，不调整写入 NFO 的本地集号。</p> : null}
         </Accordion>
         <Accordion icon={<FileText size={21} />} title="NFO 文件" summary={nfoPreview.data ? `${nfoPreview.data.default_selected_count} 项待处理` : "媒体文件保持不变"} open={openSection === "nfo"} onToggle={() => setOpenSection("nfo")}>
           <p className="notice nfo-safety-notice">不会重命名、移动或覆盖视频；NFO 目标名始终跟随原视频文件名。</p>
@@ -255,6 +269,14 @@ function objectRecord(value: unknown): Record<string, unknown> {
 }
 function numberValue(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isInteger(value) ? value : fallback;
+}
+function pad(value: number) { return String(value).padStart(2, "0"); }
+function signed(value: number) { return value > 0 ? `+${value}` : String(value); }
+function mappingMode(value: unknown): "auto" | "manual" | "single" { return value === "manual" || value === "single" ? value : "auto"; }
+function mappingSummary(mode: "auto" | "manual" | "single", season: number, providerOffset: number, localEpisode: number, localOffset: number) {
+  if (mode === "single") return `特别篇 · S${pad(season)}E${pad(localEpisode)}`;
+  if (mode === "manual") return `手动 · S${pad(season)} · Emby ${signed(localOffset)} · 元数据 ${signed(providerOffset)}`;
+  return `自动 · 第 ${season} 季 · 偏移 ${providerOffset}`;
 }
 function scrapeSummary(info: LocalScrapeInfo | undefined) {
   if (!info) return "剧集 · 季度 · 单集";

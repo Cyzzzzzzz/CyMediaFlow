@@ -28,6 +28,8 @@ const reasonText: Record<string, string> = {
   TARGET_NFO_CONFLICT: "目标 NFO 名称冲突",
   AMBIGUOUS_NFO_PAIRING: "存在多个视频或 NFO 候选，需人工确认",
   NFO_ACTION_NOT_REQUIRED: "NFO 已与视频同名或无需处理",
+  SINGLE_EPISODE_MAPPING_REQUIRES_ONE_VIDEO: "单文件映射要求目录内恰好有一个正片视频",
+  INVALID_LOCAL_EPISODE_NUMBER: "调整后的 Emby 集号必须大于 0",
 };
 
 export function NfoPreviewPanel({ preview, loading, error, excludedPaths, includedPaths, onSelectionChange, onRefresh }: Props) {
@@ -108,7 +110,7 @@ function NfoRow({ entry, selected, onToggle }: { entry: NfoPreviewEntry; selecte
   const selectable = canSelect(entry);
   const sourceName = entry.source_nfo_name ?? (entry.action === "create" ? "尚无 NFO" : entry.video_name);
   const reason = entry.selection_reason ? reasonText[entry.selection_reason] : null;
-  const visibleAction = !selected && reason && (entry.action === "create" || entry.action === "rename") ? "默认跳过" : actionText[entry.action];
+  const visibleAction = entry.action === "unchanged" && selected ? "待更新" : !selected && reason && (entry.action === "create" || entry.action === "rename" || entry.action === "unchanged") ? "默认跳过" : actionText[entry.action];
   return <div className={`rename-diff ${entry.action === "create" ? "rename" : entry.action} ${selected ? "selected" : "deselected"}`}>
     <label className="diff-select">
       <input type="checkbox" checked={selected} disabled={!selectable} onChange={(event) => onToggle(event.target.checked)} aria-label={`处理 NFO ${entry.target_nfo_name}`} />
@@ -123,7 +125,7 @@ function NfoRow({ entry, selected, onToggle }: { entry: NfoPreviewEntry; selecte
 }
 
 function canSelect(entry: NfoPreviewEntry) {
-  return entry.action === "create" || entry.action === "rename";
+  return entry.action === "create" || entry.action === "rename" || entry.action === "unchanged";
 }
 
 function groupByFolder(entries: NfoPreviewEntry[]) {

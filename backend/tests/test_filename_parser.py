@@ -70,3 +70,15 @@ def test_resolution_only_bracket_is_not_an_episode() -> None:
     assert parsed.title == "Show"
     assert "EPISODE_NOT_FOUND" in parsed.warnings
     assert "TITLE_FROM_PARENT_DIRECTORY" in parsed.warnings
+
+
+def test_theatrical_release_year_and_codec_are_not_parsed_as_season_episode() -> None:
+    parsed = FilenameParser().parse(
+        "Zombieland Saga Yume Ginga Paradise 2025-[1080p][BDRIP][x265.OPUS].mkv"
+    )
+
+    assert parsed.year == 2025
+    assert parsed.season is None
+    assert parsed.episode_start is None
+    assert parsed.absolute_episode_start is None
+    assert "EPISODE_NOT_FOUND" in parsed.warnings

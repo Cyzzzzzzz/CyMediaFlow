@@ -27,9 +27,15 @@ npm run dev -- --host 0.0.0.0 --port 4173 --strictPort
 
 ## NAS container deployment
 
-See [the detailed NAS deployment guide](docs/nas-deployment.md). Set `PUID`, `PGID`, `MEDIA_ROOT`, `DATA_ROOT`, and optionally `APP_PORT` in `.env`, keep `access_token.json` beside `compose.yaml`, then start the Compose project. The backend image installs FFmpeg/ffprobe. `MEDIA_MOUNT_MODE=rw` is required to create or update NFO sidecars; use `ro` for browse-only deployments. Application state is written under `DATA_ROOT`.
+For the current NAS, follow [the prebuilt image deployment and update runbook](docs/nas-prebuilt-deployment.md). The broader [NAS deployment guide](docs/nas-deployment.md) covers permissions, settings, direct GHCR pulls, and local-build fallbacks. Set `PUID`, `PGID`, `MEDIA_ROOT`, `DATA_ROOT`, and optionally `APP_PORT` in `.env`, keep `access_token.json` beside `compose.yaml`, then start the Compose project. The backend image installs FFmpeg/ffprobe. `MEDIA_MOUNT_MODE=rw` is required to create or update NFO sidecars; use `ro` for browse-only deployments. Application state is written under `DATA_ROOT`.
 
 The UI is exposed on `APP_PORT` (default `3000`). Docker is not installed in the current Windows test environment, so the container definitions are provided but have not yet been executed here.
+
+For an offline-base-image NAS build, the Dockerfiles intentionally use the commonly cached
+`python:3.10-slim-bookworm`, `node:22-alpine`, and `nginx:alpine` images. The backend supports
+Python 3.10. Run `docker-compose build` without `--pull` to reuse those local images; package
+installation still needs access to Debian, PyPI, and npm, optionally through the build proxy
+variables in `.env`.
 
 ## Safety
 

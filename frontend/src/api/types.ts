@@ -1,6 +1,6 @@
 export type ExternalIdentity = { provider: string; external_id: string };
 export type MediaItem = {
-  id: string; folder_name: string; title: string; year: number | null; path: string; poster_url: string | null;
+  id: string; folder_name: string; title: string; year: number | null; path: string; added_at: string; poster_url: string | null;
   video_count: number; seasons: number[]; nfo_present: boolean; external_ids: ExternalIdentity[];
   status: "matched" | "configured" | "unconfigured"; binding: MediaBinding | null;
 };

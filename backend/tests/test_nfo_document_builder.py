@@ -41,6 +41,17 @@ def test_full_bangumi_subject_is_preserved_in_series_nfo() -> None:
     assert root.findtext("bangumi/characters/character/voiceactor") == "楠木灯"
 
 
+def test_season_nfo_omits_emby_people_but_preserves_provider_people() -> None:
+    root = ET.fromstring(NfoDocumentBuilder().season(_subject(), (_episode(),), 1))
+
+    assert root.findall("actor") == []
+    assert root.findall("director") == []
+    assert root.findall("writer") == []
+    assert root.findall("credits") == []
+    assert len(root.findall("bangumi/persons/person")) == 4
+    assert root.findtext("bangumi/characters/character/voiceactor/name") == "楠木灯"
+
+
 def test_all_episode_fields_and_ffprobe_streams_are_written() -> None:
     media = MediaFileInfo(
         format_name="matroska,webm",

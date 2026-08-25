@@ -10,6 +10,7 @@ const item: MediaItem = {
   title: "测试番剧",
   year: 2026,
   path: "/media/anime-1",
+  added_at: "2026-01-01T00:00:00+00:00",
   poster_url: "https://example.test/poster.jpg",
   video_count: 12,
   seasons: [1],

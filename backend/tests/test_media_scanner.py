@@ -25,6 +25,7 @@ def test_scanner_reads_series_identity_without_writing(tmp_path: Path) -> None:
 
     assert len(items) == 1
     assert items[0].title == "示例动画"
+    assert items[0].added_at.tzinfo is not None
     assert items[0].year == 2025
     assert items[0].video_count == 1
     assert items[0].seasons == (1,)

@@ -83,6 +83,7 @@ class MediaItemView(BaseModel):
     title: str
     year: int | None
     path: str
+    added_at: str
     poster_url: str | None
     video_count: int
     seasons: list[int]
@@ -118,6 +119,7 @@ class MediaItemView(BaseModel):
             title=binding.preferred_title if binding and binding.preferred_title else item.title,
             year=binding.year if binding and binding.year else item.year,
             path=str(item.root_path),
+            added_at=item.added_at.isoformat(),
             poster_url=poster_url,
             video_count=item.video_count,
             seasons=list(item.seasons),
@@ -525,6 +527,11 @@ class NamingPreviewView(BaseModel):
 class NfoPreviewRequest(BaseModel):
     season_number: int | None = Field(default=None, ge=0, le=99)
     episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
+    episode_mapping_mode: Literal["auto", "manual", "single"] | None = None
+    local_episode_number: int | None = Field(default=None, ge=1, le=100000)
+    provider_episode_number: int | None = Field(default=None, ge=1, le=100000)
+    local_episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
+    overwrite_existing: bool = False
     bangumi_id: str | None = Field(default=None, max_length=100)
     bangumi_episode_count: int | None = Field(default=None, ge=0, le=100000)
 
@@ -600,6 +607,10 @@ class NfoGenerationRequest(BaseModel):
     tmdb_id: str | None = Field(default=None, max_length=100)
     season_number: int | None = Field(default=None, ge=0, le=99)
     episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
+    episode_mapping_mode: Literal["auto", "manual", "single"] | None = None
+    local_episode_number: int | None = Field(default=None, ge=1, le=100000)
+    provider_episode_number: int | None = Field(default=None, ge=1, le=100000)
+    local_episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
     excluded_paths: tuple[str, ...] = Field(default=(), max_length=100000)
     included_paths: tuple[str, ...] = Field(default=(), max_length=100000)
     overwrite_existing: bool = False

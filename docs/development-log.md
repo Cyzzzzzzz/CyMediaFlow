@@ -214,7 +214,7 @@ FastAPI 模块化单体
 
 技术栈：
 
-- 后端：Python 3.12、FastAPI、SQLAlchemy 2、Alembic、Pydantic 2、HTTPX；
+- 后端：Python 3.10+、FastAPI、SQLAlchemy 2、Alembic、Pydantic 2、HTTPX；
 - 前端：React、TypeScript、Vite、React Router、TanStack Query；
 - 数据库：SQLite WAL；
 - 后台任务：数据库持久化队列；
@@ -1129,3 +1129,27 @@ GET  /api/v1/events/stream
 - 远程私有仓库已创建为 `https://github.com/Cyzzzzzzz/CyMediaFlow`，默认分支为 `main`；首次部署可直接克隆该仓库。
 - 文档升级步骤改为 `git fetch`、预览待合并提交、数据库备份、`git pull --ff-only`、检查 `.env.example`/`compose.yaml` 差异、验证 Compose 并重建容器。
 - `.env`、Token、SQLite 数据库、缓存和媒体文件均不被 Git 跟踪；升级时保留。若 NAS 源码目录存在手工改动，`--ff-only` 会拒绝合并，要求先人工检查，避免静默覆盖。
+
+## 2026-08-25：复用 NAS 本地基础镜像
+
+- 后端基础镜像由 `python:3.13-slim` 调整为 NAS 已缓存的 `python:3.10-slim-bookworm`；前端构建和运行镜像分别调整为 `node:22-alpine` 与 `nginx:alpine`。
+- 项目最低 Python 版本和 Ruff 目标版本同步降为 3.10，并将 Python 3.11 才提供的 `datetime.UTC` 替换为 `timezone.utc`；全部 65 个 Python 源码及测试文件通过 Python 3.10 语法解析。
+- Compose 为前后端构建增加独立的 HTTP/HTTPS/NO_PROXY 参数，NAS 实际 `.env` 已设置 `http://192.168.5.124:20181`，用于构建阶段的 apt、pip 和 npm 访问。
+- 本地构建明确使用 `docker-compose build` 且不添加 `--pull`，从而复用 NAS 已有基础镜像；`CYMEDIAFLOW_IMAGE_PULL_POLICY=missing` 继续阻止启动阶段主动访问 GHCR。
+- 后端 63 项测试和 Ruff 检查通过；前端 15 项测试、TypeScript 检查及生产构建通过。当前 Windows 环境未安装 Docker，因此最终 Linux 容器构建仍需在 NAS 执行。
+
+## 2026-08-25：预构建镜像部署与更新主流程
+
+- 新增 `docs/nas-prebuilt-deployment.md`，以当前 NAS 实际使用的 GitHub Actions 预构建、Release 归档下载、SHA256 校验、`docker load` 和 `docker-compose up --no-build` 为唯一主线，完整覆盖首次部署、配置、验证、日常更新和故障回滚。
+- 镜像归档工作流改为按触发提交的 `sha-<完整提交 SHA>` 拉取镜像；若该提交的 Publish 工作流尚未完成，Export 会失败而不是误打包其他版本。
+- Release 现在同时提供镜像归档、SHA256 校验文件和 `.version` 提交号文件；归档内同时保留 `main` 与不可变 SHA 标签，生产 `.env` 推荐固定前后端相同的 SHA 标签。
+- 更新流程明确要求更新前记录旧镜像 SHA、备份 SQLite 与 `.env`，更新后检查健康接口、日志、媒体挂载、ffmpeg/ffprobe 和单部测试作品；回滚时优先切换到上一 SHA 镜像，必要时再恢复数据库。
+- 原 NAS 综合部署文档和 README 已链接新的主流程，避免把 GHCR 直拉、本地基础镜像构建和当前 Release 归档方案混为同一套操作。
+
+## 2026-08-25：首页搜索与排序
+
+- 首页保留简洁搜索框，可按当前展示标题或媒体文件夹名称筛选；无匹配结果时显示明确的空状态。
+- 新增“最近添加 / 按名称”排序选择器。“最近添加”默认按番剧根文件夹修改时间倒序排列，“按名称”按当前展示标题升序排列。
+- 搜索与排序由后端共同执行，并纳入前端查询缓存键；已配置的自定义标题同样参与搜索和名称排序。
+- 媒体列表接口新增 `sort=added_desc|name_asc` 与 `added_at` 字段，无效排序值返回 422，旧客户端不传参数时保持默认的最近添加顺序。
+- 新增后端接口与前端交互测试，覆盖默认排序、名称排序、搜索筛选、非法参数和控件切换；本轮没有改写任何媒体或 NFO 文件。

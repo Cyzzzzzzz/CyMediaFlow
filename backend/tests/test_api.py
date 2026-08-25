@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -38,6 +39,47 @@ def test_health_and_settings_do_not_expose_token(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["data"]["bangumi_configured"] is True
     assert "top-secret" not in response.text
+
+
+def test_media_list_supports_added_time_name_sorting_and_search(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    alpha = media_root / "Alpha Show"
+    zulu = media_root / "Zulu Show"
+    alpha.mkdir(parents=True)
+    zulu.mkdir()
+    os.utime(alpha, (1_700_000_000, 1_700_000_000))
+    os.utime(zulu, (1_800_000_000, 1_800_000_000))
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        newest = client.get(
+            "/api/v1/media",
+            params={"include_suggestions": "false", "sort": "added_desc"},
+        )
+        by_name = client.get(
+            "/api/v1/media",
+            params={"include_suggestions": "false", "sort": "name_asc"},
+        )
+        filtered = client.get(
+            "/api/v1/media",
+            params={"include_suggestions": "false", "sort": "name_asc", "q": "pha"},
+        )
+        invalid = client.get(
+            "/api/v1/media",
+            params={"include_suggestions": "false", "sort": "unknown"},
+        )
+
+    assert newest.status_code == 200
+    assert [item["title"] for item in newest.json()["data"]] == ["Zulu Show", "Alpha Show"]
+    assert newest.json()["data"][0]["added_at"].startswith("2027-01-15")
+    assert [item["title"] for item in by_name.json()["data"]] == ["Alpha Show", "Zulu Show"]
+    assert [item["title"] for item in filtered.json()["data"]] == ["Alpha Show"]
+    assert invalid.status_code == 422
 
 
 def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None:
@@ -795,3 +837,166 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
         node.text for node in series_nfo.findall("thumb") if node.get("aspect") == "clearlogo"
     ).endswith("/logo.png")
     client.app.state.container.episode_artwork_generator.generate.assert_awaited_once()
+
+
+def test_single_file_theatrical_mapping_overrides_existing_episode_nfo(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "佐贺偶像是传奇 梦想银河乐园 [7³ACG] (2025)"
+    series.mkdir(parents=True)
+    video = series / "Zombieland Saga Yume Ginga Paradise 2025-[1080p][BDRIP][x265.OPUS].mkv"
+    video.write_bytes(b"theatrical-feature")
+    episode_nfo = video.with_suffix(".nfo")
+    episode_nfo.write_text(
+        "<episodedetails><title>旧标题</title><season>20</season><episode>25</episode>"
+        "</episodedetails>",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+        episode_artwork_fallback_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        binding = {
+            "bangumi_id": "353181",
+            "tmdb_id": None,
+            "preferred_title": "佐贺偶像是传奇 梦想银河乐园",
+            "content_kind": "series",
+            "year": 2025,
+            "season_number": 0,
+            "episode_offset": 0,
+            "folder_template": "{title} ({year})/Season {season:02}",
+            "filename_template": "{title} S{season:02}E{episode:02}",
+            "emby_enabled": True,
+            "image_url": None,
+            "metadata": {
+                "primary_provider": "bangumi",
+                "bangumi_episode_count": 1,
+                "nfo_episode_mapping_mode": "single",
+                "nfo_local_episode_number": 1,
+                "nfo_provider_episode_number": 1,
+            },
+        }
+        saved = client.put(f"/api/v1/media/{media_id}/scrape-config", json=binding)
+        client.app.state.container.bangumi.get_subject = AsyncMock(
+            return_value=MetadataCandidate(
+                provider="bangumi",
+                external_id="353181",
+                title="佐贺偶像是传奇 梦想银河乐园",
+                original_title="ゾンビランドサガ ゆめぎんがパラダイス",
+                year=2025,
+                episode_count=1,
+                image_url=None,
+                summary=None,
+            )
+        )
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            return_value=(
+                ProviderEpisode(
+                    "353181-1",
+                    1,
+                    "梦想银河乐园",
+                    None,
+                    "2025-10-24",
+                    "剧场版",
+                    121,
+                ),
+            )
+        )
+        client.app.state.container.media_probe.probe = AsyncMock(
+            return_value=MediaProbeResult(None)
+        )
+
+        preview = client.post(
+            f"/api/v1/media/{media_id}/nfo-preview", json={"overwrite_existing": True}
+        )
+        generated = client.post(
+            f"/api/v1/media/{media_id}/nfo-generate",
+            json={"confirmed": True, "overwrite_existing": True},
+        )
+
+    assert saved.status_code == 200
+    assert preview.status_code == 200
+    assert preview.json()["data"]["entries"][0]["action"] == "unchanged"
+    assert preview.json()["data"]["entries"][0]["default_selected"] is True
+    assert generated.status_code == 200
+    assert episode_nfo.as_posix().endswith(".nfo")
+    episode_root = ET.parse(episode_nfo).getroot()
+    season_root = ET.parse(series / "season.nfo").getroot()
+    assert episode_root.findtext("season") == "0"
+    assert episode_root.findtext("episode") == "1"
+    assert episode_root.findtext("title") == "梦想银河乐园"
+    assert season_root.findtext("seasonnumber") == "0"
+    client.app.state.container.bangumi.get_episodes.assert_awaited_once_with("353181", 0)
+
+
+def test_regular_series_mapping_adjusts_emby_and_provider_episode_numbers(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Example Second Cour"
+    series.mkdir(parents=True)
+    video = series / "Example Show S02E13.mkv"
+    video.write_bytes(b"episode-thirteen")
+    episode_nfo = video.with_suffix(".nfo")
+    episode_nfo.write_text(
+        "<episodedetails><season>2</season><episode>13</episode></episodedetails>",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+        episode_artwork_fallback_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.bangumi.get_subject = AsyncMock(
+            return_value=MetadataCandidate(
+                provider="bangumi",
+                external_id="12345",
+                title="示例动画 后半",
+                original_title="Example Second Cour",
+                year=2026,
+                episode_count=1,
+                image_url=None,
+                summary=None,
+            )
+        )
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            return_value=(
+                ProviderEpisode("episode-1", 1, "第一集", None, None, None, 24),
+            )
+        )
+        client.app.state.container.media_probe.probe = AsyncMock(
+            return_value=MediaProbeResult(None)
+        )
+        generated = client.post(
+            f"/api/v1/media/{media_id}/nfo-generate",
+            json={
+                "confirmed": True,
+                "bangumi_id": "12345",
+                "season_number": 1,
+                "episode_offset": -12,
+                "episode_mapping_mode": "manual",
+                "local_episode_offset": -12,
+                "overwrite_existing": True,
+            },
+        )
+
+    assert generated.status_code == 200
+    episode_root = ET.parse(episode_nfo).getroot()
+    assert episode_root.findtext("season") == "1"
+    assert episode_root.findtext("episode") == "1"
+    assert episode_root.findtext("title") == "第一集"
+    client.app.state.container.bangumi.get_episodes.assert_awaited_once_with("12345", 1)

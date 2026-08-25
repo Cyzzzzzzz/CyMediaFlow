@@ -2,6 +2,8 @@
 
 本文档对应当前项目的双容器部署：`frontend` 提供 Nginx 和网页，`backend` 提供 FastAPI、SQLite、FFmpeg/ffprobe、Bangumi/TMDB 刮削及 NFO 写入能力。
 
+> 当前 NAS 使用的是“GitHub 预构建镜像 → Release 归档 → `docker load`”方案。首次部署、日常更新和回滚请优先按照 [NAS 预构建镜像完整流程](nas-prebuilt-deployment.md) 操作；本文保留路径、权限、设置与其他部署方式的补充说明。
+
 ## 1. 部署前确认
 
 NAS 需要满足以下条件：
@@ -243,7 +245,47 @@ docker-compose up -d --no-build --remove-orphans
 docker-compose ps
 ```
 
-`docker-compose pull` 只会访问 `ghcr.io`，不会下载 `python:3.13-slim`、Node 或 Nginx 的 Docker Hub 基础镜像，因此可以绕开 Docker 守护进程中遗留的 Docker Hub 镜像源。不要在 NAS 上执行 `docker-compose build` 或 `docker-compose build --pull`。
+`docker-compose pull` 只会访问 `ghcr.io`，不会下载 Python、Node 或 Nginx 的 Docker Hub 基础镜像，因此可以绕开 Docker 守护进程中遗留的 Docker Hub 镜像源。GHCR 可用时优先采用这种预构建镜像流程；GHCR 不可用时按下一节使用 NAS 已有基础镜像本地构建。两种情况下都不要执行 `docker-compose build --pull`。
+
+### 9.0.1 使用 NAS 已有基础镜像本地构建
+
+无法拉取 GHCR 预构建镜像时，可以复用 NAS 已存在的以下三个基础镜像：
+
+```text
+python:3.10-slim-bookworm
+node:22-alpine
+nginx:alpine
+```
+
+当前 Dockerfile 已固定使用这三个标签，后端最低版本也已调整为 Python 3.10。先确认镜像确实存在：
+
+```bash
+docker image inspect python:3.10-slim-bookworm >/dev/null
+docker image inspect node:22-alpine >/dev/null
+docker image inspect nginx:alpine >/dev/null
+```
+
+在 `.env` 中切换为本地构建策略，并设置构建阶段代理：
+
+```dotenv
+CYMEDIAFLOW_IMAGE_PULL_POLICY=missing
+CYMEDIAFLOW_BUILD_HTTP_PROXY=http://192.168.5.124:20181
+CYMEDIAFLOW_BUILD_HTTPS_PROXY=http://192.168.5.124:20181
+CYMEDIAFLOW_BUILD_NO_PROXY=localhost,127.0.0.1,backend,frontend,192.168.5.0/24
+```
+
+这里保留 `missing` 是为了阻止 `up` 主动访问 GHCR；前一步显式执行的 `docker-compose build` 仍会正常构建本地服务镜像。
+
+随后构建并启动。不要添加 `--pull`，否则 Docker 会再次访问远程镜像仓库检查基础镜像：
+
+```bash
+cd /volume2/docker/0016.CyMediaFlow/src
+docker-compose build
+docker-compose up -d --no-build --remove-orphans
+docker-compose ps
+```
+
+基础镜像会直接使用 NAS 本地缓存，但后端仍需通过 `apt` 安装 FFmpeg、通过 `pip` 安装 Python 依赖，前端仍需通过 `npm` 安装依赖。因此构建容器需要能经上述代理访问 Debian、PyPI 和 npm；三个基础镜像本地存在并不等于整个构建过程完全离线。
 
 `.env` 中必须保留下列三项（从更新后的 `.env.example` 复制即可）：
 
@@ -463,45 +505,15 @@ docker-compose start backend
 
 ### 16.1 当前 NAS 的标准更新流程：Release 镜像归档
 
-当前 NAS 的 Docker 守护进程无法访问 GHCR，必须使用此流程；**不要执行** `docker-compose pull` 或 `docker-compose build`。每次更新按顺序完成：
+当前 NAS 的 Docker 守护进程无法稳定访问 GHCR，标准更新方式是通过宿主机代理下载 GitHub Release 归档，再执行 `docker load`。请完整按照 [NAS 预构建镜像完整部署与更新流程](nas-prebuilt-deployment.md) 的“日常更新”章节操作。
 
-1. 确认仓库 **Actions** 中“Publish NAS container images”已针对最新 `main` 提交显示绿色成功。
-2. 在 **Actions** 中手动运行“Export NAS image archive”，填写一个未使用的发布标签，例如 `nas-images-20260825-01`；等待工作流成功并生成 GitHub Release。
-3. 在 NAS 执行下列命令。将 `<发布标签>` 替换为第 2 步的实际标签。
+新版归档包含归档文件、SHA256 校验文件和提交号文件，并同时携带 `main` 与不可变的 `sha-<提交 SHA>` 镜像标签。生产 `.env` 应使用相同提交号的前后端 `sha-...` 标签，并保留：
 
-```bash
-cd /volume2/docker/0016.CyMediaFlow/src
-
-# 先确认无意外的本地源码改动，再通过已验证的 HTTP 代理更新源码
-git status --short
-git -c http.proxy=http://192.168.5.124:20181 fetch origin
-git log --oneline HEAD..origin/main
-git -c http.proxy=http://192.168.5.124:20181 pull --ff-only origin main
-
-# 经宿主机 curl 和代理下载 Release 附件；Docker 不参与网络下载
-curl --fail --location --proxy http://192.168.5.124:20181 \
-  --output cymediaflow-nas-images.tar.gz \
-  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz
-curl --fail --location --proxy http://192.168.5.124:20181 \
-  --output cymediaflow-nas-images.tar.gz.sha256 \
-  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz.sha256
-sha256sum -c cymediaflow-nas-images.tar.gz.sha256
-
-# 导入后端、前端镜像；不联网、不重启 Docker
-docker load -i cymediaflow-nas-images.tar.gz
-
-# 必须为 missing，防止 Compose 再尝试访问 GHCR
-grep '^CYMEDIAFLOW_IMAGE_PULL_POLICY=' .env
-docker-compose up -d --no-build --remove-orphans
-docker-compose ps
-curl http://127.0.0.1:20260/api/v1/system/health
+```dotenv
+CYMEDIAFLOW_IMAGE_PULL_POLICY=missing
 ```
 
-执行 `grep` 后应显示 `CYMEDIAFLOW_IMAGE_PULL_POLICY=missing`。若不是，编辑 `.env` 修改为该值后再执行 `docker-compose up`。`20260` 是当前 NAS 配置的端口；其他 NAS 按 `.env` 中的 `APP_PORT` 替换。确认服务正常后可以删除本次下载的归档文件：
-
-```bash
-rm cymediaflow-nas-images.tar.gz cymediaflow-nas-images.tar.gz.sha256
-```
+该流程不执行 `docker-compose pull`、不在 NAS 构建镜像，也不需要重启 Docker 守护进程。更新前必须备份数据库和 `.env`，更新后必须检查健康接口、日志、媒体挂载、ffmpeg/ffprobe，并至少用一部测试作品验证 NFO 与 Emby 刷新结果。
 
 ### 16.2 仅适用于 Docker 可直接访问 GHCR 的 NAS
 

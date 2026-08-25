@@ -18,8 +18,8 @@ jobs:
   export:
     runs-on: ubuntu-latest
     env:
-      BACKEND_IMAGE: ghcr.io/cyzzzzzzz/cymediaflow-backend:main
-      FRONTEND_IMAGE: ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
+      BACKEND_REPOSITORY: ghcr.io/cyzzzzzzz/cymediaflow-backend
+      FRONTEND_REPOSITORY: ghcr.io/cyzzzzzzz/cymediaflow-frontend
       ARCHIVE_NAME: cymediaflow-nas-images.tar.gz
     steps:
       - name: Check out release source
@@ -32,15 +32,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull published images
+      - name: Pull images for this exact source revision
         run: |
-          docker pull "$BACKEND_IMAGE"
-          docker pull "$FRONTEND_IMAGE"
+          BACKEND_SHA_IMAGE="$BACKEND_REPOSITORY:sha-$GITHUB_SHA"
+          FRONTEND_SHA_IMAGE="$FRONTEND_REPOSITORY:sha-$GITHUB_SHA"
+          docker pull "$BACKEND_SHA_IMAGE"
+          docker pull "$FRONTEND_SHA_IMAGE"
+          docker tag "$BACKEND_SHA_IMAGE" "$BACKEND_REPOSITORY:main"
+          docker tag "$FRONTEND_SHA_IMAGE" "$FRONTEND_REPOSITORY:main"
 
       - name: Create compressed Docker image archive
         run: |
-          docker save "$BACKEND_IMAGE" "$FRONTEND_IMAGE" | gzip --best > "$ARCHIVE_NAME"
+          BACKEND_SHA_IMAGE="$BACKEND_REPOSITORY:sha-$GITHUB_SHA"
+          FRONTEND_SHA_IMAGE="$FRONTEND_REPOSITORY:sha-$GITHUB_SHA"
+          docker save \
+            "$BACKEND_REPOSITORY:main" \
+            "$FRONTEND_REPOSITORY:main" \
+            "$BACKEND_SHA_IMAGE" \
+            "$FRONTEND_SHA_IMAGE" \
+            | gzip --best > "$ARCHIVE_NAME"
           sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          printf '%s\n' "$GITHUB_SHA" > "$ARCHIVE_NAME.version"
 
       - name: Publish archive to GitHub Release
         env:
@@ -48,4 +60,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "CyMediaFlow NAS image archive"
-          gh release upload "$RELEASE_TAG" "$ARCHIVE_NAME" "$ARCHIVE_NAME.sha256" --clobber
+          gh release upload "$RELEASE_TAG" \
+            "$ARCHIVE_NAME" \
+            "$ARCHIVE_NAME.sha256" \
+            "$ARCHIVE_NAME.version" \
+            --clobber

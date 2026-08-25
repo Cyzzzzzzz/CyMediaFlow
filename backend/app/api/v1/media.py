@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
@@ -45,8 +45,9 @@ async def list_media(
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
     q: str | None = None,
     include_suggestions: bool = True,
+    sort: Literal["added_desc", "name_asc"] = Query(default="added_desc"),
 ) -> dict[str, object]:
-    items = await service.list_media(q, include_suggestions)
+    items = await service.list_media(q, include_suggestions, sort)
     return ok(
         request,
         [
@@ -225,6 +226,11 @@ def preview_nfo(
         media_id,
         season_number=body.season_number,
         episode_offset=body.episode_offset,
+        episode_mapping_mode=body.episode_mapping_mode,
+        local_episode_number=body.local_episode_number,
+        provider_episode_number=body.provider_episode_number,
+        local_episode_offset=body.local_episode_offset,
+        overwrite_existing=body.overwrite_existing,
         bangumi_id=body.bangumi_id,
         bangumi_episode_count=body.bangumi_episode_count,
     )
@@ -246,6 +252,10 @@ async def generate_nfo(
         tmdb_id=body.tmdb_id,
         season_number=body.season_number,
         episode_offset=body.episode_offset,
+        episode_mapping_mode=body.episode_mapping_mode,
+        local_episode_number=body.local_episode_number,
+        provider_episode_number=body.provider_episode_number,
+        local_episode_offset=body.local_episode_offset,
         excluded_paths=body.excluded_paths,
         included_paths=body.included_paths,
         overwrite_existing=body.overwrite_existing,

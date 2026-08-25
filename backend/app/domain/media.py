@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -17,6 +18,7 @@ class MediaItem:
     title: str
     year: int | None
     root_path: Path
+    added_at: datetime
     poster_path: Path | None
     video_count: int
     seasons: tuple[int, ...]

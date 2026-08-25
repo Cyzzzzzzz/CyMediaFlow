@@ -23,6 +23,7 @@ from app.application.ports import (
 )
 from app.core.errors import MediaNotFoundError, NfoGenerationError
 from app.domain.artwork import IMAGE_EXTENSIONS, ArtworkGenerationResult
+from app.domain.episode_mapping import resolve_episode_mapping
 from app.domain.media import MetadataCandidate, ProviderPerson
 from app.domain.nfo import NfoGenerationResult, NfoGenerationSkip, NfoPreviewEntry
 
@@ -76,6 +77,10 @@ class NfoGenerationService:
         tmdb_id: str | None = None,
         season_number: int | None = None,
         episode_offset: int | None = None,
+        episode_mapping_mode: str | None = None,
+        local_episode_number: int | None = None,
+        provider_episode_number: int | None = None,
+        local_episode_offset: int | None = None,
         excluded_paths: tuple[str, ...] = (),
         included_paths: tuple[str, ...] = (),
         overwrite_existing: bool = False,
@@ -133,13 +138,32 @@ class NfoGenerationService:
             if episode_offset is not None
             else (binding.episode_offset if binding else 0)
         )
+        mapping = resolve_episode_mapping(
+            mode=episode_mapping_mode,
+            local_episode_number=local_episode_number,
+            provider_episode_number=provider_episode_number,
+            local_episode_offset=local_episode_offset,
+            metadata=binding.metadata if binding else None,
+        )
         preview = self._preview_service.preview(
             media_id,
             season_number=configured_season,
             episode_offset=offset,
+            episode_mapping_mode=mapping.mode,
+            local_episode_number=mapping.local_episode_number,
+            provider_episode_number=mapping.provider_episode_number,
+            local_episode_offset=mapping.local_episode_offset,
+            overwrite_existing=overwrite_existing,
             bangumi_id=effective_external_id,
             bangumi_episode_count=len(episodes),
         )
+        regular_entries = [entry for entry in preview.entries if entry.category == "regular"]
+        if mapping.is_single and len(regular_entries) != 1:
+            raise NfoGenerationError(
+                "SINGLE_EPISODE_MAPPING_REQUIRES_ONE_VIDEO",
+                "单文件剧场版/特别篇映射要求目录内恰好有一个常规视频文件",
+                {"regular_video_count": len(regular_entries)},
+            )
         excluded = {self._normalize_relative(path) for path in excluded_paths}
         included = {self._normalize_relative(path) for path in included_paths}
         locks = tuple(dict.fromkeys(locked_fields))
@@ -205,7 +229,9 @@ class NfoGenerationService:
         season_directories: set[Path] = set()
         for entry in preview.entries:
             if entry.category != "regular" or (
-                entry.parsed.episode_start is None and entry.parsed.absolute_episode_start is None
+                not mapping.is_single
+                and entry.parsed.episode_start is None
+                and entry.parsed.absolute_episode_start is None
             ):
                 continue
             season_directories.add(self._safe_target(item.root_path, entry.folder))
@@ -217,9 +243,10 @@ class NfoGenerationService:
             ):
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_UPDATEABLE"))
                 continue
+            parsed_episode = entry.parsed.episode_start or entry.parsed.absolute_episode_start or 0
             mapped_number = (
-                entry.parsed.episode_start or entry.parsed.absolute_episode_start or 0
-            ) + offset
+                mapping.provider_episode_number if mapping.is_single else parsed_episode + offset
+            )
             provider_episode = episode_by_number.get(mapped_number)
             if provider_episode is None:
                 skipped.append(
@@ -228,10 +255,20 @@ class NfoGenerationService:
                 continue
             target = self._safe_target(item.root_path, entry.target_nfo_relative_path)
             video_target = self._safe_target(item.root_path, entry.video_relative_path)
-            local_episode_number = (
-                entry.parsed.episode_start or entry.parsed.absolute_episode_start or mapped_number
+            effective_local_episode = (
+                mapping.local_episode_number
+                if mapping.is_single
+                else parsed_episode
+                + (mapping.local_episode_offset if mapping.adjusts_local_episode else 0)
             )
-            episode_scope = f"{configured_season}:{local_episode_number}"
+            if effective_local_episode < 1:
+                skipped.append(
+                    NfoGenerationSkip(
+                        entry.target_nfo_relative_path, "INVALID_LOCAL_EPISODE_NUMBER"
+                    )
+                )
+                continue
+            episode_scope = f"{configured_season}:{effective_local_episode}"
             media = None
             if not self._merger.field_locked(
                 "episodes.media_streams", locks, episode_scope
@@ -275,7 +312,7 @@ class NfoGenerationService:
                 target,
                 entry.target_nfo_relative_path,
                 self._documents.episode(
-                    provider_episode, configured_season, local_episode_number, media
+                    provider_episode, configured_season, effective_local_episode, media
                 ),
                 level="episode",
                 overwrite_existing=overwrite_existing,

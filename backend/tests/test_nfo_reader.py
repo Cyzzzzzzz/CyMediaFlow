@@ -24,9 +24,10 @@ def test_nfo_reader_builds_series_season_episode_hierarchy_with_artwork(tmp_path
     )
     (season / "season.nfo").write_text(
         """<season><title>家里蹲吸血姬的苦闷</title><seasonnumber>1</seasonnumber>
-<plot>季度简介</plot><actor><name>季度演员</name></actor>
+<plot>季度简介</plot>
 <uniqueid type="bangumi">414214</uniqueid><thumb>season.jpg</thumb>
-<bangumi><id>414214</id></bangumi></season>""",
+<bangumi><id>414214</id><characters><character><voiceactor>
+<name>季度演员</name></voiceactor></character></characters></bangumi></season>""",
         encoding="utf-8",
     )
     video_stem = "[Group] Vampire Princess - 01"
