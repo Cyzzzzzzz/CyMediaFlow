@@ -459,7 +459,53 @@ docker-compose start backend
 
 ## 16. 更新项目
 
-每次新功能发布到 GitHub 的 `main` 分支后，GitHub Actions 会发布新的 GHCR 镜像。确认该工作流显示绿色成功后，NAS 按下列顺序升级。该流程只更新 Git 跟踪的源码与容器镜像；`.env`、`access_token.json`、`DATA_ROOT`、本地数据库和媒体文件均不受 `git pull` 影响。
+每次新功能发布到 GitHub 的 `main` 分支后，GitHub Actions 会发布新的 GHCR 镜像。该流程只更新 Git 跟踪的源码与容器镜像；`.env`、`access_token.json`、`DATA_ROOT`、本地数据库和媒体文件均不受 `git pull` 影响。
+
+### 16.1 当前 NAS 的标准更新流程：Release 镜像归档
+
+当前 NAS 的 Docker 守护进程无法访问 GHCR，必须使用此流程；**不要执行** `docker-compose pull` 或 `docker-compose build`。每次更新按顺序完成：
+
+1. 确认仓库 **Actions** 中“Publish NAS container images”已针对最新 `main` 提交显示绿色成功。
+2. 在 **Actions** 中手动运行“Export NAS image archive”，填写一个未使用的发布标签，例如 `nas-images-20260825-01`；等待工作流成功并生成 GitHub Release。
+3. 在 NAS 执行下列命令。将 `<发布标签>` 替换为第 2 步的实际标签。
+
+```bash
+cd /volume2/docker/0016.CyMediaFlow/src
+
+# 先确认无意外的本地源码改动，再通过已验证的 HTTP 代理更新源码
+git status --short
+git -c http.proxy=http://192.168.5.124:20181 fetch origin
+git log --oneline HEAD..origin/main
+git -c http.proxy=http://192.168.5.124:20181 pull --ff-only origin main
+
+# 经宿主机 curl 和代理下载 Release 附件；Docker 不参与网络下载
+curl --fail --location --proxy http://192.168.5.124:20181 \
+  --output cymediaflow-nas-images.tar.gz \
+  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz
+curl --fail --location --proxy http://192.168.5.124:20181 \
+  --output cymediaflow-nas-images.tar.gz.sha256 \
+  https://github.com/Cyzzzzzzz/CyMediaFlow/releases/download/<发布标签>/cymediaflow-nas-images.tar.gz.sha256
+sha256sum -c cymediaflow-nas-images.tar.gz.sha256
+
+# 导入后端、前端镜像；不联网、不重启 Docker
+docker load -i cymediaflow-nas-images.tar.gz
+
+# 必须为 missing，防止 Compose 再尝试访问 GHCR
+grep '^CYMEDIAFLOW_IMAGE_PULL_POLICY=' .env
+docker-compose up -d --no-build --remove-orphans
+docker-compose ps
+curl http://127.0.0.1:20260/api/v1/system/health
+```
+
+执行 `grep` 后应显示 `CYMEDIAFLOW_IMAGE_PULL_POLICY=missing`。若不是，编辑 `.env` 修改为该值后再执行 `docker-compose up`。`20260` 是当前 NAS 配置的端口；其他 NAS 按 `.env` 中的 `APP_PORT` 替换。确认服务正常后可以删除本次下载的归档文件：
+
+```bash
+rm cymediaflow-nas-images.tar.gz cymediaflow-nas-images.tar.gz.sha256
+```
+
+### 16.2 仅适用于 Docker 可直接访问 GHCR 的 NAS
+
+确认“Publish NAS container images”工作流显示绿色成功后，Docker 可以直接访问 GHCR 的 NAS 才可按下列方式升级：
 
 ```bash
 # 1. 进入部署目录，确认没有意外改动
