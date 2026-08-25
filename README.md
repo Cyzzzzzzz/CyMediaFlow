@@ -37,6 +37,11 @@ Python 3.10. Run `docker-compose build` without `--pull` to reuse those local im
 installation still needs access to Debian, PyPI, and npm, optionally through the build proxy
 variables in `.env`.
 
+After the first local-build deployment, routine NAS updates can use
+`scripts/nas-local-update.sh`: pull `main`, then run the script once. It stops the old
+containers first, backs up configuration and SQLite, builds versioned local images, validates
+the backend import, starts the new version, and attempts an automatic rollback on failure.
+
 ## Safety
 
 - Media scanning and ffprobe inspection are read-only. Media-directory writes are limited to configured `.ignore` marker synchronization and explicitly confirmed NFO/artwork updates.

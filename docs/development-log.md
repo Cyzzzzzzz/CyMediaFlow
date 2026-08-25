@@ -1162,3 +1162,4 @@ GET  /api/v1/events/stream
 - 修正综合部署文档中本地构建章节误写 `pull_policy=always` 的冲突，统一为本地镜像配合 `missing`，并补充禁止 `build --pull`、`pull`、`down -v` 和广泛镜像清理的说明。
 - NAS 首次实际启动发现标准库 `StrEnum` 仅支持 Python 3.11 及以上；文件角色枚举已改为 Python 3.10 可用且保持字符串序列化行为一致的 `str, Enum` 实现。
 - NAS 镜像发布工作流新增 Python 3.10 专用验证任务；后端 Ruff 与全量测试通过后才允许构建发布镜像，避免只验证“能够构建”却遗漏运行时版本兼容问题。
+- 新增 `scripts/nas-local-update.sh` 一键更新脚本：在构建前按要求停止原容器，备份 `.env` 与 SQLite，以当前提交号构建和验证本地镜像，切换后等待健康检查；失败时自动恢复旧配置、数据库（若新容器已启动）并尝试重启旧版本。

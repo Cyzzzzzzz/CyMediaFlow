@@ -8,7 +8,7 @@ node:22-alpine
 nginx:alpine
 ```
 
-该方案从 NAS 上的 Git 源码构建 CyMediaFlow 镜像。构建过程不需要重启 Docker，也不会在构建时停止当前容器；只有新镜像构建成功并执行 `docker-compose up` 后，前后端容器才会被替换。
+该方案从 NAS 上的 Git 源码构建 CyMediaFlow 镜像，不需要重启 Docker。手工流程可以在旧容器运行时先构建；本文推荐的一键更新脚本则按当前部署要求，先停止旧容器并完成一致性备份，再开始构建和切换。
 
 > 本文命令使用当前 NAS 已安装的 `docker-compose v2.20.1`。源码目录按当前部署写为 `/volume2/docker/0016.CyMediaFlow/src`；如果实际位置不同，请整体替换。
 
@@ -188,6 +188,37 @@ docker-compose exec backend ls -la /media
 - Emby 刷新后能读取新 NFO。
 
 ## 四、本地构建模式的日常更新
+
+### 推荐：一键更新脚本
+
+仓库提供 `scripts/nas-local-update.sh`。以后只需先拉取代码，再执行一次脚本：
+
+```bash
+cd /volume2/docker/0016.CyMediaFlow/src
+git -c http.proxy=http://192.168.5.124:20181 pull --ff-only origin main
+./scripts/nas-local-update.sh
+```
+
+脚本固定按以下顺序执行：
+
+1. 检查 Git 工作区、Compose 配置和三个本地基础镜像；
+2. **停止当前前后端容器**；
+3. 备份 `.env` 和已停止状态下的 SQLite 数据库；
+4. 以 `local-<当前提交号>` 构建前后端镜像，不使用 `--pull`；
+5. 在独立临时容器中验证后端完整导入；
+6. 将 `.env` 切换到新标签并启动容器；
+7. 等待网页健康检查通过。
+
+如果停止容器后的任一步失败，脚本会恢复旧 `.env`；新容器已经启动过时还会恢复数据库备份，然后尝试重新启动旧版本。脚本不会删除旧镜像、媒体文件、NFO 或备份。
+
+默认备份目录是源码目录的同级 `backups`，即当前布局下的 `/volume2/docker/0016.CyMediaFlow/backups`。如需修改，可在执行时设置：
+
+```bash
+CYMEDIAFLOW_BACKUP_DIR=/volume2/docker/0016.CyMediaFlow/my-backups \
+  ./scripts/nas-local-update.sh
+```
+
+下面的手工步骤保留用于理解、诊断和手工回滚。
 
 ### 1. 记录当前运行版本
 
