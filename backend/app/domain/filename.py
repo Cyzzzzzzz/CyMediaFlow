@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 
 
-class FileRole(StrEnum):
+class FileRole(str, Enum):
     VIDEO = "video"
     SUBTITLE = "subtitle"
     OTHER = "other"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @dataclass(frozen=True, slots=True)

@@ -82,3 +82,8 @@ def test_theatrical_release_year_and_codec_are_not_parsed_as_season_episode() ->
     assert parsed.episode_start is None
     assert parsed.absolute_episode_start is None
     assert "EPISODE_NOT_FOUND" in parsed.warnings
+
+
+def test_file_role_is_string_compatible_on_python_310() -> None:
+    assert FileRole.VIDEO == "video"
+    assert str(FileRole.VIDEO) == "video"

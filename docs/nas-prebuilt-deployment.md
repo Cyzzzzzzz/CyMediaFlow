@@ -1,5 +1,7 @@
 # CyMediaFlow：NAS 预构建镜像完整部署与更新流程
 
+> 如果准备停止使用 Release 归档，改为复用 NAS 中的 Python、Node 和 Nginx 基础镜像构建，请使用 [NAS 本地构建与更新流程](nas-local-build-deployment.md)。两套流程共享数据库、Token 和媒体目录，但应用镜像标签与更新命令不同。
+
 本文档是当前 NAS 的主流程，适用于以下环境：
 
 - Docker Engine `24.0.2`，`linux/amd64`；

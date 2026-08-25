@@ -249,6 +249,8 @@ docker-compose ps
 
 ### 9.0.1 使用 NAS 已有基础镜像本地构建
 
+从预构建归档切换、本地版本化镜像、日常更新及回滚的完整命令见 [复用 NAS 基础镜像的本地构建与更新流程](nas-local-build-deployment.md)。本节只保留快速说明。
+
 无法拉取 GHCR 预构建镜像时，可以复用 NAS 已存在的以下三个基础镜像：
 
 ```text
@@ -265,37 +267,45 @@ docker image inspect node:22-alpine >/dev/null
 docker image inspect nginx:alpine >/dev/null
 ```
 
-在 `.env` 中切换为本地构建策略，并设置构建阶段代理：
+先在 `.env` 中设置构建阶段代理：
 
 ```dotenv
-CYMEDIAFLOW_IMAGE_PULL_POLICY=missing
 CYMEDIAFLOW_BUILD_HTTP_PROXY=http://192.168.5.124:20181
 CYMEDIAFLOW_BUILD_HTTPS_PROXY=http://192.168.5.124:20181
 CYMEDIAFLOW_BUILD_NO_PROXY=localhost,127.0.0.1,backend,frontend,192.168.5.0/24
 ```
 
-这里保留 `missing` 是为了阻止 `up` 主动访问 GHCR；前一步显式执行的 `docker-compose build` 仍会正常构建本地服务镜像。
-
-随后构建并启动。不要添加 `--pull`，否则 Docker 会再次访问远程镜像仓库检查基础镜像：
+使用源码提交号生成本地标签并显式构建。不要添加 `--pull`，否则 Docker 会再次访问远程镜像仓库检查基础镜像：
 
 ```bash
 cd /volume2/docker/0016.CyMediaFlow/src
-docker-compose build
-docker-compose up -d --no-build --remove-orphans
-docker-compose ps
+CYMF_LOCAL_TAG="local-$(git rev-parse --short=12 HEAD)"
+CYMEDIAFLOW_BACKEND_IMAGE="cymediaflow-backend:$CYMF_LOCAL_TAG" \
+CYMEDIAFLOW_FRONTEND_IMAGE="cymediaflow-frontend:$CYMF_LOCAL_TAG" \
+docker-compose build backend frontend
+docker image inspect "cymediaflow-backend:$CYMF_LOCAL_TAG" >/dev/null
+docker image inspect "cymediaflow-frontend:$CYMF_LOCAL_TAG" >/dev/null
 ```
 
 基础镜像会直接使用 NAS 本地缓存，但后端仍需通过 `apt` 安装 FFmpeg、通过 `pip` 安装 Python 依赖，前端仍需通过 `npm` 安装依赖。因此构建容器需要能经上述代理访问 Debian、PyPI 和 npm；三个基础镜像本地存在并不等于整个构建过程完全离线。
 
-`.env` 中必须保留下列三项（从更新后的 `.env.example` 复制即可）：
+本地构建不要沿用 GHCR 镜像标签，建议按源码提交号生成可回滚的本地标签：
 
 ```dotenv
-CYMEDIAFLOW_IMAGE_PULL_POLICY=always
-CYMEDIAFLOW_BACKEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-backend:main
-CYMEDIAFLOW_FRONTEND_IMAGE=ghcr.io/cyzzzzzzz/cymediaflow-frontend:main
+CYMEDIAFLOW_IMAGE_PULL_POLICY=missing
+CYMEDIAFLOW_BACKEND_IMAGE=cymediaflow-backend:local-<提交号前12位>
+CYMEDIAFLOW_FRONTEND_IMAGE=cymediaflow-frontend:local-<提交号前12位>
 ```
 
-GHCR 容器包需要设为公开，NAS 才能匿名拉取。首次发布后，在 GitHub 仓库主页右侧的 **Packages** 中分别打开 `cymediaflow-backend` 和 `cymediaflow-frontend`，进入 **Package settings**，将 **Package visibility** 设为 **Public**。若因网络策略必须保持私有，则需在 NAS 使用只具备 `read:packages` 权限的 GitHub 凭据先执行 `docker login ghcr.io`；不要把该令牌写入 `.env` 或 Git 仓库。
+前后端必须使用同一提交号。先通过临时环境变量构建并确认新镜像存在，再修改 `.env` 和执行 `up --no-build`；构建失败不会影响仍在运行的旧容器。
+
+修改 `.env` 后启动：
+
+```bash
+docker-compose config
+docker-compose up -d --no-build --remove-orphans
+docker-compose ps
+```
 
 ### 9.1 Docker 守护进程无法访问 GHCR 时：导入发布归档
 
@@ -562,6 +572,12 @@ git fetch origin
 - ffmpeg/ffprobe 是否显示可用；
 - 选一部番剧只读检查 NFO 预览；
 - 日志中是否出现数据库或权限错误。
+
+### 16.3 使用 NAS 本地基础镜像构建更新
+
+如果 `.env` 使用 `cymediaflow-backend:local-*` 和 `cymediaflow-frontend:local-*`，不要执行 `docker-compose pull`。更新时先备份数据库与 `.env`，再快进拉取源码，以新的 `local-<提交号>` 标签执行不带 `--pull` 的 `docker-compose build`。构建和镜像检查成功后才修改 `.env` 并执行 `docker-compose up -d --no-build`。
+
+完整的首次切换、日常更新、验收与回滚命令见 [复用 NAS 基础镜像的本地构建与更新流程](nas-local-build-deployment.md)。
 
 ## 17. 常见问题
 

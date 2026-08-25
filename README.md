@@ -27,7 +27,7 @@ npm run dev -- --host 0.0.0.0 --port 4173 --strictPort
 
 ## NAS container deployment
 
-For the current NAS, follow [the prebuilt image deployment and update runbook](docs/nas-prebuilt-deployment.md). The broader [NAS deployment guide](docs/nas-deployment.md) covers permissions, settings, direct GHCR pulls, and local-build fallbacks. Set `PUID`, `PGID`, `MEDIA_ROOT`, `DATA_ROOT`, and optionally `APP_PORT` in `.env`, keep `access_token.json` beside `compose.yaml`, then start the Compose project. The backend image installs FFmpeg/ffprobe. `MEDIA_MOUNT_MODE=rw` is required to create or update NFO sidecars; use `ro` for browse-only deployments. Application state is written under `DATA_ROOT`.
+For the current NAS, follow [the prebuilt image deployment and update runbook](docs/nas-prebuilt-deployment.md), or use the dedicated [NAS local-build and update runbook](docs/nas-local-build-deployment.md) when reusing its cached Python, Node, and Nginx base images. The broader [NAS deployment guide](docs/nas-deployment.md) covers permissions and settings. Set `PUID`, `PGID`, `MEDIA_ROOT`, `DATA_ROOT`, and optionally `APP_PORT` in `.env`, keep `access_token.json` beside `compose.yaml`, then start the Compose project. The backend image installs FFmpeg/ffprobe. `MEDIA_MOUNT_MODE=rw` is required to create or update NFO sidecars; use `ro` for browse-only deployments. Application state is written under `DATA_ROOT`.
 
 The UI is exposed on `APP_PORT` (default `3000`). Docker is not installed in the current Windows test environment, so the container definitions are provided but have not yet been executed here.
 

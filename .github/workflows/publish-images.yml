@@ -17,8 +17,31 @@ permissions:
   packages: write
 
 jobs:
+  validate-backend:
+    name: Validate backend on Python 3.10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend and test dependencies
+        working-directory: backend
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run Python 3.10 checks
+        working-directory: backend
+        run: python -m ruff check app tests && python -m pytest -q
+
   publish:
     name: Publish ${{ matrix.service }} image
+    needs: validate-backend
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
