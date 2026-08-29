@@ -117,6 +117,7 @@ class NfoPreviewService:
                     parsed,
                     configured_season,
                     preview_offset,
+                    source_rules=(source_rules if mapping.uses_source_rules else ()),
                     season_override=configured_season if single_mapping_valid else None,
                     episode_override=(
                         mapping.provider_episode_number if single_mapping_valid else None
@@ -164,6 +165,7 @@ class NfoPreviewService:
                 parsed,
                 configured_season,
                 preview_offset,
+                source_rules=(source_rules if mapping.uses_source_rules else ()),
                 season_override=configured_season if single_mapping_valid else None,
                 episode_override=(
                     mapping.provider_episode_number if single_mapping_valid else None
@@ -194,11 +196,13 @@ class NfoPreviewService:
                 relative, parsed.season, configured_season
             )
             source_rule_mapped = not mapping.uses_source_rules or (
-                parsed_local_episode is not None
-                and any(
-                    rule.contains(parsed_local_season, parsed_local_episode)
-                    for rule in source_rules
+                self._matching_source_rule(
+                    source_rules,
+                    relative.as_posix(),
+                    parsed_local_season,
+                    parsed_local_episode,
                 )
+                is not None
             )
             folder_excluded = self._folder_is_excluded(
                 relative.parent.as_posix(), effective_excluded_folders
@@ -270,6 +274,7 @@ class NfoPreviewService:
         configured_season: int,
         offset: int,
         *,
+        source_rules: tuple[EpisodeSourceRule, ...] = (),
         season_override: int | None = None,
         episode_override: int | None = None,
     ) -> tuple[str, int, int] | None:
@@ -277,10 +282,56 @@ class NfoPreviewService:
             season = season_override if season_override is not None else configured_season
             return relative_path.parent.as_posix().casefold(), season, episode_override
         episode = NfoPreviewService._parsed_episode(parsed)
+        detected_season = resolve_local_season(
+            relative_path, parsed.season, configured_season
+        )
+        source_rule = NfoPreviewService._matching_source_rule(
+            source_rules,
+            relative_path.as_posix(),
+            detected_season,
+            episode,
+        )
+        if source_rule is not None and source_rule.local_path is not None:
+            return (
+                relative_path.parent.as_posix().casefold(),
+                source_rule.local_season,
+                source_rule.local_episode_start,
+            )
         if episode is None:
             return None
-        season = resolve_local_season(relative_path, parsed.season, configured_season)
-        return relative_path.parent.as_posix().casefold(), season, episode + offset
+        return (
+            relative_path.parent.as_posix().casefold(),
+            detected_season,
+            episode + offset,
+        )
+
+    @staticmethod
+    def _matching_source_rule(
+        rules: tuple[EpisodeSourceRule, ...],
+        relative_path: str,
+        local_season: int,
+        local_episode: int | None,
+    ) -> EpisodeSourceRule | None:
+        path_rule = next(
+            (
+                rule
+                for rule in rules
+                if rule.local_path is not None
+                and rule.matches(relative_path, local_season, local_episode)
+            ),
+            None,
+        )
+        if path_rule is not None:
+            return path_rule
+        return next(
+            (
+                rule
+                for rule in rules
+                if rule.local_path is None
+                and rule.matches(relative_path, local_season, local_episode)
+            ),
+            None,
+        )
 
     @staticmethod
     def _parsed_episode(parsed: ParsedMediaInfo) -> int | None:

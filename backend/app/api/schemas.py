@@ -70,9 +70,30 @@ class EpisodeSourceRuleView(BaseModel):
     provider_episode_start: int = Field(default=1, ge=0, le=100000)
     provider_season: int = Field(default=1, ge=0, le=99)
     number_mode: Literal["episode", "sort"] = "episode"
+    local_path: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator("local_path")
+    @classmethod
+    def validate_local_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.replace("\\", "/").strip("/")
+        parts = normalized.split("/")
+        if not normalized or value.startswith(("/", "\\")) or ":" in parts[0]:
+            raise ValueError("local_path must be relative to the media root")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("local_path contains an unsafe path segment")
+        return normalized
 
     @model_validator(mode="after")
     def validate_range(self) -> EpisodeSourceRuleView:
+        if (
+            self.local_path is not None
+            and self.local_episode_end != self.local_episode_start
+        ):
+            raise ValueError(
+                "a local_path rule must map to exactly one local episode"
+            )
         if (
             self.local_episode_end is not None
             and self.local_episode_end < self.local_episode_start
@@ -91,6 +112,7 @@ class EpisodeSourceRuleView(BaseModel):
             provider_episode_start=rule.provider_episode_start,
             provider_season=rule.provider_season,
             number_mode=rule.number_mode,  # type: ignore[arg-type]
+            local_path=rule.local_path,
         )
 
     def to_domain(self) -> EpisodeSourceRule:
@@ -109,9 +131,17 @@ class DetectedEpisodeRangeView(BaseModel):
     episode_count: int
 
 
+class DetectedSingleFileView(BaseModel):
+    relative_path: str
+    video_name: str
+    suggested_season: int
+    suggested_episode: int
+
+
 class EpisodeMappingSuggestionView(BaseModel):
     rules: list[EpisodeSourceRuleView]
     detected_ranges: list[DetectedEpisodeRangeView]
+    detected_single_files: list[DetectedSingleFileView]
     warnings: list[str]
 
     @classmethod
@@ -123,6 +153,10 @@ class EpisodeMappingSuggestionView(BaseModel):
             detected_ranges=[
                 DetectedEpisodeRangeView.model_validate(detected, from_attributes=True)
                 for detected in suggestion.detected_ranges
+            ],
+            detected_single_files=[
+                DetectedSingleFileView.model_validate(detected, from_attributes=True)
+                for detected in suggestion.detected_single_files
             ],
             warnings=list(suggestion.warnings),
         )
@@ -161,6 +195,14 @@ class ScrapeBindingView(BaseModel):
             if (rule.provider, rule.external_id) not in known_subjects:
                 raise ValueError("episode source rule must reference an associated subject")
 
+        local_paths = [
+            rule.local_path.casefold()
+            for rule in self.episode_source_rules
+            if rule.local_path is not None
+        ]
+        if len(local_paths) != len(set(local_paths)):
+            raise ValueError("episode source rules cannot repeat a local_path")
+
         by_season: dict[int, list[EpisodeSourceRuleView]] = {}
         for rule in self.episode_source_rules:
             existing = by_season.setdefault(rule.local_season, [])
@@ -171,6 +213,11 @@ class ScrapeBindingView(BaseModel):
 
     @staticmethod
     def _ranges_overlap(left: EpisodeSourceRuleView, right: EpisodeSourceRuleView) -> bool:
+        if left.local_path is not None and right.local_path is not None:
+            return (
+                left.local_path.casefold() == right.local_path.casefold()
+                or left.local_episode_start == right.local_episode_start
+            )
         left_end = left.local_episode_end if left.local_episode_end is not None else 100001
         right_end = right.local_episode_end if right.local_episode_end is not None else 100001
         return left.local_episode_start <= right_end and right.local_episode_start <= left_end
@@ -480,6 +527,8 @@ class ProviderEpisodeView(BaseModel):
     summary: str | None
     runtime_minutes: int | None
     image_url: str | None
+    episode_type: int
+    sort_number: float | None
 
     @classmethod
     def from_domain(cls, episode) -> ProviderEpisodeView:
@@ -493,6 +542,8 @@ class ProviderEpisodeView(BaseModel):
             summary=episode.summary,
             runtime_minutes=episode.runtime_minutes,
             image_url=episode.image_url,
+            episode_type=episode.episode_type,
+            sort_number=episode.sort_number,
         )
 
 

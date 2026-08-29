@@ -172,6 +172,8 @@ async def test_bangumi_get_episodes_normalizes_regular_episode_metadata(tmp_path
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v0/episodes"
         assert request.url.params["subject_id"] == "253"
+        if request.url.params["type"] == "1":
+            return httpx.Response(200, json={"total": 0, "data": []})
         assert request.url.params["type"] == "0"
         return httpx.Response(
             200,
@@ -217,3 +219,49 @@ async def test_bangumi_get_episodes_normalizes_regular_episode_metadata(tmp_path
     assert episodes[0].comment_count == 42
     assert episodes[0].duration_text == "24m"
     assert episodes[0].duration_seconds == 1440
+
+
+@pytest.mark.asyncio
+async def test_bangumi_get_episodes_includes_specials_after_regular_episodes(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "access_token.json"
+    token_file.write_text("{}", encoding="utf-8")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        episode_type = int(request.url.params["type"])
+        episode_id = 100 + episode_type
+        return httpx.Response(
+            200,
+            json={
+                "total": 1,
+                "data": [
+                    {
+                        "id": episode_id,
+                        "ep": 1 if episode_type == 0 else 0,
+                        "sort": 1 if episode_type == 0 else 14,
+                        "name": "Regular" if episode_type == 0 else "Special",
+                        "type": episode_type,
+                    }
+                ],
+            },
+        )
+
+    provider = BangumiMetadataProvider(
+        api_url="https://api.example.test",
+        token_file=token_file,
+        user_agent="CyMediaFlow/Test",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    episodes = await provider.get_episodes("253")
+
+    normalized = [
+        (episode.external_id, episode.episode_type, episode.sort_number)
+        for episode in episodes
+    ]
+    assert normalized == [
+        ("100", 0, 1),
+        ("101", 1, 14),
+    ]

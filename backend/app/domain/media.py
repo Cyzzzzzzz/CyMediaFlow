@@ -148,7 +148,7 @@ class ProviderSubjectBinding:
 
 @dataclass(frozen=True, slots=True)
 class EpisodeSourceRule:
-    """Maps a local season/episode range to one remote subject."""
+    """Maps a local episode range or one immutable video path to a remote subject."""
 
     provider: str
     external_id: str
@@ -158,6 +158,7 @@ class EpisodeSourceRule:
     provider_episode_start: int = 1
     provider_season: int = 1
     number_mode: str = "episode"
+    local_path: str | None = None
 
     def contains(self, season: int, episode: int) -> bool:
         return (
@@ -168,6 +169,22 @@ class EpisodeSourceRule:
 
     def provider_episode_number(self, local_episode: int) -> int:
         return self.provider_episode_start + local_episode - self.local_episode_start
+
+    def matches(
+        self,
+        relative_path: str,
+        season: int,
+        episode: int | None,
+    ) -> bool:
+        """Prefer an exact path binding; otherwise use the legacy numeric range."""
+
+        if self.local_path is not None:
+            return self._normalize_path(relative_path) == self._normalize_path(self.local_path)
+        return episode is not None and self.contains(season, episode)
+
+    @staticmethod
+    def _normalize_path(value: str) -> str:
+        return value.replace("\\", "/").strip("/").casefold()
 
 
 @dataclass(frozen=True, slots=True)

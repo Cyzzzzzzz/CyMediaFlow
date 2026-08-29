@@ -16,9 +16,20 @@ class DetectedEpisodeRange:
 
 
 @dataclass(frozen=True, slots=True)
+class DetectedSingleFile:
+    """An unnumbered main feature that can be represented as an Emby special."""
+
+    relative_path: str
+    video_name: str
+    suggested_season: int
+    suggested_episode: int
+
+
+@dataclass(frozen=True, slots=True)
 class EpisodeMappingSuggestion:
     """Reviewable mapping rules inferred without writing media or NFO files."""
 
     rules: tuple[EpisodeSourceRule, ...]
     detected_ranges: tuple[DetectedEpisodeRange, ...]
     warnings: tuple[str, ...] = ()
+    detected_single_files: tuple[DetectedSingleFile, ...] = ()

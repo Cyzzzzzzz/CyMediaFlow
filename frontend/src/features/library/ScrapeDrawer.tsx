@@ -514,6 +514,23 @@ function EpisodeSourceRulesEditor({ subjects, rules, defaultSeason, onChange, on
       provider_episode_start: 1,
       provider_season: subject.provider === "tmdb" ? defaultSeason : 1,
       number_mode: subject.provider === "bangumi" ? "sort" : "episode",
+      local_path: null,
+    }]);
+  };
+  const addFileRule = () => {
+    const subject = subjects.find((value) => subjectKey(value.provider, value.external_id) === selectedSubject) ?? subjects[0];
+    const detected = suggestion?.detected_single_files.find((file) => !rules.some((rule) => rule.local_path?.toLowerCase() === file.relative_path.toLowerCase()));
+    if (!subject || !detected) return;
+    onChange([...rules, {
+      provider: subject.provider,
+      external_id: subject.external_id,
+      local_season: detected.suggested_season,
+      local_episode_start: detected.suggested_episode,
+      local_episode_end: detected.suggested_episode,
+      provider_episode_start: 1,
+      provider_season: 1,
+      number_mode: subject.provider === "bangumi" ? "sort" : "episode",
+      local_path: detected.relative_path,
     }]);
   };
   const updateRule = (index: number, patch: Partial<EpisodeSourceRule>) => onChange(rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule));
@@ -522,18 +539,19 @@ function EpisodeSourceRulesEditor({ subjects, rules, defaultSeason, onChange, on
     onSuggest();
   };
   return <div className="source-rules-editor">
-    <div className="source-rules-head"><div><strong>分段来源</strong><small>按本地季集范围选择远程作品</small></div><div><button className="suggest-rules-button" type="button" onClick={suggestRules} disabled={!subjects.length || suggesting}><MagicWand size={15} />{suggesting ? "识别中" : "智能生成"}</button><select value={selectedSubject} onChange={(event) => setSelectedSubject(event.target.value)} disabled={!subjects.length}>{subjects.map((subject) => <option key={subjectKey(subject.provider, subject.external_id)} value={subjectKey(subject.provider, subject.external_id)}>[{providerLabel(subject.provider)}] {subject.title}</option>)}</select><button type="button" onClick={addRule} disabled={!subjects.length}><Plus size={15} />添加规则</button></div></div>
+    <div className="source-rules-head"><div><strong>分段来源</strong><small>按季集范围或指定主视频选择远程作品</small></div><div><button className="suggest-rules-button" type="button" onClick={suggestRules} disabled={!subjects.length || suggesting}><MagicWand size={15} />{suggesting ? "识别中" : "智能生成"}</button><select value={selectedSubject} onChange={(event) => setSelectedSubject(event.target.value)} disabled={!subjects.length}>{subjects.map((subject) => <option key={subjectKey(subject.provider, subject.external_id)} value={subjectKey(subject.provider, subject.external_id)}>[{providerLabel(subject.provider)}] {subject.title}</option>)}</select><button type="button" onClick={addRule} disabled={!subjects.length}><Plus size={15} />添加范围</button><button type="button" onClick={addFileRule} disabled={!subjects.length || !suggestion?.detected_single_files.some((file) => !rules.some((rule) => rule.local_path?.toLowerCase() === file.relative_path.toLowerCase()))}><Plus size={15} />映射主视频</button></div></div>
     {!subjects.length ? <p className="notice">请先在“作品匹配”中添加需要使用的 Bangumi/TMDB 条目。</p> : null}
-    {suggestion ? <div className="mapping-suggestion-result"><span>已识别 {suggestion.detected_ranges.map((range) => `S${pad(range.season_number)} E${pad(range.episode_start)}–E${pad(range.episode_end)}`).join("、")}，生成 {suggestion.rules.length} 条规则。</span>{suggestion.warnings.map((warning) => <small key={warning}>{warning}</small>)}</div> : null}
+    {suggestion ? <div className="mapping-suggestion-result"><span>已识别 {[...suggestion.detected_ranges.map((range) => `S${pad(range.season_number)} E${pad(range.episode_start)}–E${pad(range.episode_end)}`), ...suggestion.detected_single_files.map((file) => `${file.video_name} → S${pad(file.suggested_season)}E${pad(file.suggested_episode)}`)].join("、") || "无可映射文件"}，生成 {suggestion.rules.length} 条规则。</span>{suggestion.warnings.map((warning) => <small key={warning}>{warning}</small>)}</div> : null}
     {suggestionError ? <p className="notice source-rule-error">智能识别失败，请检查文件命名、来源配置与网络连接。</p> : null}
     {rules.length ? <div className="source-rule-list">{rules.map((rule, index) => {
       const subject = subjects.find((value) => subjectKey(value.provider, value.external_id) === subjectKey(rule.provider, rule.external_id));
       return <div className="source-rule" key={`${subjectKey(rule.provider, rule.external_id)}-${index}`}>
         <div className="source-rule-title"><span><span className={`provider-tag ${rule.provider}`}>{providerLabel(rule.provider)}</span><strong>{subject?.title ?? `${rule.provider.toUpperCase()} #${rule.external_id}`}</strong><small>#{rule.external_id}</small></span><button type="button" onClick={() => onChange(rules.filter((_, ruleIndex) => ruleIndex !== index))} aria-label="删除映射规则"><Trash size={16} /></button></div>
         <div className="source-rule-fields">
+          {rule.local_path ? <Field label="本地主视频" wide><input value={rule.local_path} onChange={(event) => updateRule(index, { local_path: event.target.value })} /></Field> : null}
           <Field label="本地季（Emby）"><input type="number" min="0" max="99" value={rule.local_season} onChange={(event) => updateRule(index, { local_season: Number(event.target.value) })} /></Field>
-          <Field label="本地起始集"><input type="number" min="0" value={rule.local_episode_start} onChange={(event) => updateRule(index, { local_episode_start: Number(event.target.value) })} /></Field>
-          <Field label="本地结束集"><input type="number" min="0" placeholder="持续更新" value={rule.local_episode_end ?? ""} onChange={(event) => updateRule(index, { local_episode_end: event.target.value === "" ? null : Number(event.target.value) })} /></Field>
+          <Field label={rule.local_path ? "本地集（Emby）" : "本地起始集"}><input type="number" min="0" value={rule.local_episode_start} onChange={(event) => updateRule(index, { local_episode_start: Number(event.target.value), ...(rule.local_path ? { local_episode_end: Number(event.target.value) } : {}) })} /></Field>
+          {!rule.local_path ? <Field label="本地结束集"><input type="number" min="0" placeholder="持续更新" value={rule.local_episode_end ?? ""} onChange={(event) => updateRule(index, { local_episode_end: event.target.value === "" ? null : Number(event.target.value) })} /></Field> : null}
           <Field label="远程起始编号"><input type="number" min="0" value={rule.provider_episode_start} onChange={(event) => updateRule(index, { provider_episode_start: Number(event.target.value) })} /></Field>
           {rule.provider === "tmdb" ? <Field label="TMDB 远程季"><input type="number" min="0" max="99" value={rule.provider_season} onChange={(event) => updateRule(index, { provider_season: Number(event.target.value) })} /></Field> : null}
           {rule.provider === "bangumi" ? <Field label="Bangumi 编号字段"><select value={rule.number_mode} onChange={(event) => updateRule(index, { number_mode: event.target.value as "episode" | "sort" })}><option value="sort">sort（推荐分割放送）</option><option value="episode">ep / 集号</option></select></Field> : null}
@@ -541,7 +559,7 @@ function EpisodeSourceRulesEditor({ subjects, rules, defaultSeason, onChange, on
       </div>;
     })}</div> : null}
     {errors.map((error) => <p className="notice source-rule-error" key={error}>{error}</p>)}
-    <details className="mapping-field-help"><summary>字段说明与自动识别规则</summary><dl><div><dt>来源</dt><dd>选择该分段从 Bangumi 或 TMDB 的哪个作品条目读取元数据。</dd></div><div><dt>本地季（Emby）</dt><dd>文件在本地被识别到的季度，也是写入 episode NFO 的 season 值。</dd></div><div><dt>本地起始/结束集</dt><dd>这条规则覆盖的本地文件集号范围；留空结束集表示后续集数也使用该来源。</dd></div><div><dt>远程起始编号</dt><dd>本地起始集对应的远程分集编号，之后按 1 递增映射。</dd></div><div><dt>TMDB 远程季</dt><dd>TMDB 把分集放在具体季下，因此必须保留；通常与本地季相同，但可手动修正。</dd></div><div><dt>Bangumi 编号字段</dt><dd>分割放送优先用连续的 sort；仅当条目按自身集号从 1 开始时改用 ep。</dd></div></dl><p>智能生成会从目录名/文件名识别本地季集范围，再读取各来源的远程分集数量和编号进行切段。结果只进入当前表单，保存前仍可修改。</p></details>
+    <details className="mapping-field-help"><summary>字段说明与自动识别规则</summary><dl><div><dt>来源</dt><dd>选择该分段从 Bangumi 或 TMDB 的哪个作品条目读取元数据。</dd></div><div><dt>本地主视频</dt><dd>文件级规则只匹配这一条相对路径，不改视频名；适合嵌套在剧集目录中的剧场版或无集号特别篇。</dd></div><div><dt>本地季（Emby）</dt><dd>写入 episode NFO 的 season 值。剧场版默认放入特别篇 Season 0，仍可手动调整。</dd></div><div><dt>本地起始/结束集</dt><dd>范围规则覆盖本地文件集号；文件级规则只填写一个 Emby 集号。</dd></div><div><dt>远程起始编号</dt><dd>本地起始集对应的远程分集编号，之后按 1 递增映射。</dd></div><div><dt>TMDB 远程季</dt><dd>TMDB 把分集放在具体季下，因此必须保留；通常与本地季相同，但可手动修正。</dd></div><div><dt>Bangumi 编号字段</dt><dd>分割放送优先用连续的 sort；同一 sort 同时存在正片和 SP 时优先正片，没有正片才使用 SP。</dd></div></dl><p>智能生成会识别常规季集范围，也会把唯一的 [Main] 主视频与“剧场版/特别篇”角色条目配对为 S00E01。Menu、Preview、Trailer 与舞台问候等附加内容不会参与。</p></details>
   </div>;
 }
 
@@ -632,7 +650,9 @@ function seasonalBangumiReferences(binding: MediaBinding): BangumiSeasonReferenc
   for (const rule of binding.episode_source_rules.filter((value) => value.provider === "bangumi")) {
     const subject = subjects.get(rule.external_id);
     const key = `${rule.local_season}:${rule.external_id}`;
-    const range = `E${pad(rule.local_episode_start)}–${rule.local_episode_end === null ? "持续更新" : `E${pad(rule.local_episode_end)}`}`;
+    const range = rule.local_path
+      ? `${rule.local_path.split("/").at(-1)} → E${pad(rule.local_episode_start)}`
+      : `E${pad(rule.local_episode_start)}–${rule.local_episode_end === null ? "持续更新" : `E${pad(rule.local_episode_end)}`}`;
     const existing = references.get(key);
     if (existing) {
       existing.ranges.push(range);
@@ -686,6 +706,8 @@ function apiErrorMessage(error: unknown) {
 function sourceRuleErrors(rules: EpisodeSourceRule[]) {
   const errors: string[] = [];
   rules.forEach((rule, index) => {
+    if (rule.local_path && rules.slice(index + 1).some((other) => other.local_path?.toLowerCase() === rule.local_path?.toLowerCase())) errors.push(`第 ${index + 1} 条规则重复使用了同一个本地主视频。`);
+    if (rule.local_path && rule.local_episode_end !== rule.local_episode_start) errors.push(`第 ${index + 1} 条主视频规则必须只映射到一个本地集号。`);
     if (rule.local_episode_end !== null && rule.local_episode_end < rule.local_episode_start) errors.push(`第 ${index + 1} 条规则的结束集不能小于起始集。`);
     rules.slice(index + 1).forEach((other, otherIndex) => {
       if (rule.local_season !== other.local_season) return;

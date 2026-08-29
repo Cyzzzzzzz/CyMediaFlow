@@ -10,6 +10,14 @@ EXTRA_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("menu", re.compile(r"(?:^|[/\\\[\] ._-])menus?(?:$|[/\\\[\] ._-])", re.I)),
     ("credit", re.compile(r"(?:NCOP|NCED)(?:\s*[&+/-]\s*(?:NCOP|NCED))?", re.I)),
     ("pv", re.compile(r"(?:^|[/\\\[\] ._-])PV\d*(?:$|[/\\\[\] ._-])", re.I)),
+    (
+        "preview",
+        re.compile(
+            r"(?:^|[/\\\[\] ._-])(?:preview|trailer|teaser)(?:[_ -]?\d+s?)?"
+            r"(?:$|[/\\\[\] ._-])|舞台挨拶|舞台问候|舞台問候",
+            re.I,
+        ),
+    ),
     ("dialogue", re.compile(r"对话|對話|dialogue", re.I)),
     ("phone", re.compile(r"电话|電話|phone", re.I)),
     ("bonus", re.compile(r"特典映像|特典|bonus|extras?", re.I)),
@@ -32,6 +40,10 @@ EXTRA_FOLDER_NAMES = {
     "ncop": "credit",
     "nced": "credit",
     "pv": "pv",
+    "preview": "preview",
+    "previews": "preview",
+    "trailer": "preview",
+    "trailers": "preview",
     "sp": "special",
     "sps": "special",
     "special": "special",

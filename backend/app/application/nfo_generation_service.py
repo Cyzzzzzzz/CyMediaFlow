@@ -195,7 +195,13 @@ class NfoGenerationService:
                     for loaded in loaded_sources
                 }
             )
-        episode_by_number = {episode.episode_number: episode for episode in episodes}
+        episode_by_number: dict[int, ProviderEpisode] = {}
+        for episode in episodes:
+            current = episode_by_number.get(episode.episode_number)
+            if current is None or (
+                current.episode_type != 0 and episode.episode_type == 0
+            ):
+                episode_by_number[episode.episode_number] = episode
         excluded = {self._normalize_relative(path) for path in excluded_paths}
         configured_excluded_folders = excluded_folders or self._metadata_string_tuple(
             binding.metadata.get("nfo_excluded_folders") if binding else None
@@ -215,6 +221,7 @@ class NfoGenerationService:
             overwrite_existing=overwrite_existing,
             bangumi_id=effective_external_id,
             bangumi_episode_count=(None if mapping.uses_source_rules else len(episodes)),
+            episode_source_rules=source_rules,
             excluded_folders=configured_excluded_folders,
         )
         regular_entries = [
@@ -298,10 +305,26 @@ class NfoGenerationService:
         for entry in preview.entries:
             if entry.category != "regular":
                 continue
+            parsed_episode = self._parsed_episode(entry)
+            detected_local_season = resolve_local_season(
+                entry.video_relative_path,
+                entry.parsed.season,
+                configured_season,
+            )
+            source_rule = (
+                self._matching_source_rule(
+                    source_rules,
+                    entry.video_relative_path,
+                    detected_local_season,
+                    parsed_episode,
+                )
+                if mapping.uses_source_rules
+                else None
+            )
             if (
                 not mapping.is_single
-                and entry.parsed.episode_start is None
-                and entry.parsed.absolute_episode_start is None
+                and parsed_episode is None
+                and source_rule is None
             ):
                 skipped.append(
                     NfoGenerationSkip(
@@ -312,10 +335,10 @@ class NfoGenerationService:
                 continue
             local_season = configured_season
             if mapping.uses_source_rules:
-                local_season = resolve_local_season(
-                    entry.video_relative_path,
-                    entry.parsed.season,
-                    configured_season,
+                local_season = (
+                    source_rule.local_season
+                    if source_rule is not None
+                    else detected_local_season
                 )
             if not self._selected(
                 entry, excluded, excluded_folder_set, included, overwrite_existing
@@ -333,12 +356,8 @@ class NfoGenerationService:
             ):
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_UPDATEABLE"))
                 continue
-            parsed_episode = self._parsed_episode(entry)
             loaded_source = primary_source
             if mapping.uses_source_rules:
-                source_rule = self._matching_source_rule(
-                    source_rules, local_season, parsed_episode
-                )
                 if source_rule is None:
                     skipped.append(
                         NfoGenerationSkip(
@@ -352,7 +371,18 @@ class NfoGenerationService:
                     source_rule.provider_season,
                 )
                 loaded_source = source_cache[source_key]
-                mapped_number = source_rule.provider_episode_number(parsed_episode)
+                if source_rule.local_path is not None:
+                    mapped_number = source_rule.provider_episode_start
+                elif parsed_episode is not None:
+                    mapped_number = source_rule.provider_episode_number(parsed_episode)
+                else:
+                    skipped.append(
+                        NfoGenerationSkip(
+                            entry.target_nfo_relative_path,
+                            "LOCAL_EPISODE_NOT_RECOGNIZED",
+                        )
+                    )
+                    continue
                 provider_episode = self._find_provider_episode(
                     loaded_source.episodes, mapped_number, source_rule.number_mode
                 )
@@ -360,7 +390,7 @@ class NfoGenerationService:
                 mapped_number = (
                     mapping.provider_episode_number
                     if mapping.is_single
-                    else parsed_episode + offset
+                    else (parsed_episode or 0) + offset
                 )
                 provider_episode = episode_by_number.get(mapped_number)
             if provider_episode is None:
@@ -370,12 +400,14 @@ class NfoGenerationService:
                 continue
             target = self._safe_target(item.root_path, entry.target_nfo_relative_path)
             video_target = self._safe_target(item.root_path, entry.video_relative_path)
-            effective_local_episode = (
-                mapping.local_episode_number
-                if mapping.is_single
-                else parsed_episode
-                + (mapping.local_episode_offset if mapping.adjusts_local_episode else 0)
-            )
+            if mapping.is_single:
+                effective_local_episode = mapping.local_episode_number
+            elif source_rule is not None and source_rule.local_path is not None:
+                effective_local_episode = source_rule.local_episode_start
+            else:
+                effective_local_episode = (parsed_episode or 0) + (
+                    mapping.local_episode_offset if mapping.adjusts_local_episode else 0
+                )
             if effective_local_episode < 0:
                 skipped.append(
                     NfoGenerationSkip(
@@ -605,13 +637,28 @@ class NfoGenerationService:
 
     @staticmethod
     def _matching_source_rule(
-        rules: tuple[EpisodeSourceRule, ...], local_season: int, local_episode: int
+        rules: tuple[EpisodeSourceRule, ...],
+        relative_path: str,
+        local_season: int,
+        local_episode: int | None,
     ) -> EpisodeSourceRule | None:
+        path_rule = next(
+            (
+                rule
+                for rule in rules
+                if rule.local_path is not None
+                and rule.matches(relative_path, local_season, local_episode)
+            ),
+            None,
+        )
+        if path_rule is not None:
+            return path_rule
         return next(
             (
                 rule
                 for rule in rules
-                if rule.contains(local_season, local_episode)
+                if rule.local_path is None
+                and rule.matches(relative_path, local_season, local_episode)
             ),
             None,
         )
@@ -621,14 +668,19 @@ class NfoGenerationService:
         episodes: tuple[ProviderEpisode, ...], number: int, number_mode: str
     ) -> ProviderEpisode | None:
         if number_mode == "sort":
-            return next(
-                (
-                    episode
-                    for episode in episodes
-                    if episode.sort_number is not None
-                    and abs(episode.sort_number - number) < 0.0001
+            matches = tuple(
+                episode
+                for episode in episodes
+                if episode.sort_number is not None
+                and abs(episode.sort_number - number) < 0.0001
+            )
+            return min(
+                matches,
+                key=lambda episode: (
+                    0 if episode.episode_type == 0 else 1,
+                    episode.episode_number,
                 ),
-                None,
+                default=None,
             )
         return next(
             (episode for episode in episodes if episode.episode_number == number),
@@ -636,12 +688,12 @@ class NfoGenerationService:
         )
 
     @staticmethod
-    def _parsed_episode(entry: NfoPreviewEntry) -> int:
+    def _parsed_episode(entry: NfoPreviewEntry) -> int | None:
         if entry.parsed.episode_start is not None:
             return entry.parsed.episode_start
         if entry.parsed.absolute_episode_start is not None:
             return entry.parsed.absolute_episode_start
-        return 0
+        return None
 
     async def _generate_artwork(
         self,

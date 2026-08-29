@@ -142,42 +142,53 @@ class BangumiMetadataProvider:
         self, external_id: str, season_number: int = 1
     ) -> tuple[ProviderEpisode, ...]:
         episodes: list[ProviderEpisode] = []
-        offset = 0
         limit = 200
         try:
             async with self._client() as client:
-                while True:
-                    response = await client.get(
-                        "/v0/episodes",
-                        params={
-                            "subject_id": external_id,
-                            "type": 0,
-                            "limit": limit,
-                            "offset": offset,
-                        },
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
-                    page = payload.get("data", [])
-                    if not isinstance(page, list):
-                        raise ValueError("Invalid episode response")
-                    episodes.extend(
-                        mapped
-                        for item in page
-                        if isinstance(item, dict)
-                        and (mapped := self._map_episode(item)) is not None
-                    )
-                    total = payload.get("total")
-                    offset += len(page)
-                    if (
-                        not page
-                        or (isinstance(total, int) and offset >= total)
-                        or len(page) < limit
-                    ):
-                        break
+                for episode_type in (0, 1):
+                    offset = 0
+                    while True:
+                        response = await client.get(
+                            "/v0/episodes",
+                            params={
+                                "subject_id": external_id,
+                                "type": episode_type,
+                                "limit": limit,
+                                "offset": offset,
+                            },
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        page = payload.get("data", [])
+                        if not isinstance(page, list):
+                            raise ValueError("Invalid episode response")
+                        episodes.extend(
+                            mapped
+                            for item in page
+                            if isinstance(item, dict)
+                            and (mapped := self._map_episode(item)) is not None
+                        )
+                        total = payload.get("total")
+                        offset += len(page)
+                        if (
+                            not page
+                            or (isinstance(total, int) and offset >= total)
+                            or len(page) < limit
+                        ):
+                            break
         except (httpx.HTTPError, ValueError) as exc:
             raise ProviderUnavailableError("Bangumi 暂时无法读取分集信息") from exc
-        return tuple(sorted(episodes, key=lambda episode: episode.episode_number))
+        unique = {episode.external_id: episode for episode in episodes}
+        return tuple(
+            sorted(
+                unique.values(),
+                key=lambda episode: (
+                    0 if episode.episode_type == 0 else 1,
+                    episode.episode_number,
+                    episode.sort_number if episode.sort_number is not None else float("inf"),
+                ),
+            )
+        )
 
     def _client(self) -> httpx.AsyncClient:
         headers = {"User-Agent": self._user_agent, "Accept": "application/json"}
@@ -258,12 +269,13 @@ class BangumiMetadataProvider:
 
     @staticmethod
     def _map_episode(item: dict[str, object]) -> ProviderEpisode | None:
-        episode = item.get("ep")
-        if not isinstance(episode, int | float) or isinstance(episode, bool):
-            return None
-        episode_number = int(episode)
+        episode = _float(item.get("ep"))
+        sort_number = _float(item.get("sort"))
+        episode_number = int(episode) if episode is not None else 0
         if episode_number < 1:
-            return None
+            if sort_number is None or sort_number < 1:
+                return None
+            episode_number = int(sort_number)
         original_title = str(item.get("name") or "").strip() or None
         title = (
             str(item.get("name_cn") or "").strip() or original_title or f"第 {episode_number} 集"
@@ -282,7 +294,7 @@ class BangumiMetadataProvider:
             runtime_minutes=runtime,
             subject_id=_text(item.get("subject_id")),
             episode_type=_int(item.get("type")) or 0,
-            sort_number=_float(item.get("sort")),
+            sort_number=sort_number,
             disc_number=_int(item.get("disc")),
             comment_count=_int(item.get("comment")) or 0,
             duration_text=_text(item.get("duration")),

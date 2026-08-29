@@ -232,8 +232,9 @@ def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None
                     "local_episode_start": 1,
                     "local_episode_end": 11,
                     "provider_episode_start": 1,
-                    "provider_season": 1,
-                    "number_mode": "sort",
+                "provider_season": 1,
+                "number_mode": "sort",
+                "local_path": None,
                 }
             ],
         }
@@ -327,6 +328,7 @@ def test_episode_mapping_suggestion_splits_bangumi_cours_by_remote_sort(
             "provider_episode_start": 1,
             "provider_season": 1,
             "number_mode": "sort",
+            "local_path": None,
         },
         {
             "provider": "bangumi",
@@ -337,6 +339,7 @@ def test_episode_mapping_suggestion_splits_bangumi_cours_by_remote_sort(
             "provider_episode_start": 3,
             "provider_season": 1,
             "number_mode": "sort",
+            "local_path": None,
         },
     ]
 
@@ -396,6 +399,95 @@ def test_episode_mapping_suggestion_reuses_tmdb_show_for_each_local_season(
     assert [rule["local_season"] for rule in rules] == [1, 2]
     assert client.app.state.container.tmdb.get_episodes.await_args_list[0].args == ("88", 1)
     assert client.app.state.container.tmdb.get_episodes.await_args_list[1].args == ("88", 2)
+
+
+def test_episode_mapping_suggestion_maps_nested_movie_main_file_to_specials(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Sound Euphonium"
+    season = series / "Season 1"
+    movie = series / "Sound Euphonium The Movie"
+    season.mkdir(parents=True)
+    movie.mkdir()
+    (season / "Sound Euphonium S01E01.mkv").write_bytes(b"episode")
+    main_video = movie / "[Main] Sound Euphonium The Movie.mkv"
+    main_video.write_bytes(b"movie")
+    (movie / "Preview.mkv").write_bytes(b"preview")
+    (movie / "初日舞台挨拶映像.mkv").write_bytes(b"stage-greeting")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    async def episodes_for(external_id: str, _season_number: int):
+        return (
+            ProviderEpisode(
+                f"episode-{external_id}",
+                1,
+                "Episode",
+                None,
+                None,
+                None,
+                24,
+                subject_id=external_id,
+                sort_number=1,
+            ),
+        )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            side_effect=episodes_for
+        )
+        response = client.post(
+            f"/api/v1/media/{media_id}/episode-mapping/suggest",
+            json={
+                "default_season": 1,
+                "provider_subjects": [
+                    {
+                        "provider": "bangumi",
+                        "external_id": "115908",
+                        "title": "Sound Euphonium",
+                        "role": "primary",
+                    },
+                    {
+                        "provider": "bangumi",
+                        "external_id": "152092",
+                        "title": "Sound Euphonium The Movie",
+                        "role": "movie",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    relative_path = main_video.relative_to(series).as_posix()
+    assert result["detected_single_files"] == [
+        {
+            "relative_path": relative_path,
+            "video_name": main_video.name,
+            "suggested_season": 0,
+            "suggested_episode": 1,
+        }
+    ]
+    assert result["rules"][-1] == {
+        "provider": "bangumi",
+        "external_id": "152092",
+        "local_season": 0,
+        "local_episode_start": 1,
+        "local_episode_end": 1,
+        "provider_episode_start": 1,
+        "provider_season": 1,
+        "number_mode": "sort",
+        "local_path": relative_path,
+    }
+    assert result["warnings"] == []
 
 
 def test_episode_mapping_suggestion_uses_title_season_hints_for_split_cours(
@@ -1643,6 +1735,7 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
     manual_extras.mkdir()
     first_video = season / "Split Cour Show S01E01.mkv"
     twelfth_video = season / "Split Cour Show S01E12.mkv"
+    fourteenth_video = season / "Split Cour Show S01E14.mkv"
     unmapped_video = season / "Split Cour Show S01E24.mkv"
     zero_video = second_season / "Split Cour Show E00.mkv"
     nc_extra = specials / "Split Cour Show [01(NC Ver.)].mkv"
@@ -1650,6 +1743,7 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
     manually_excluded = manual_extras / "Split Cour Show S01E25.mkv"
     first_video.write_bytes(b"episode-one")
     twelfth_video.write_bytes(b"episode-twelve")
+    fourteenth_video.write_bytes(b"episode-fourteen-special")
     unmapped_video.write_bytes(b"episode-unmapped")
     zero_video.write_bytes(b"episode-zero")
     nc_extra.write_bytes(b"creditless-extra")
@@ -1795,6 +1889,18 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
                     subject_id="222",
                     sort_number=12,
                 ),
+                ProviderEpisode(
+                    "episode-222-sp-14",
+                    14,
+                    "Special episode fourteen",
+                    None,
+                    None,
+                    None,
+                    24,
+                    subject_id="222",
+                    episode_type=1,
+                    sort_number=14,
+                ),
             )
 
         client.app.state.container.bangumi.get_episodes = AsyncMock(side_effect=episodes_for)
@@ -1827,15 +1933,18 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
             "reason": "EPISODE_SOURCE_NOT_MAPPED",
         }
     ]
-    assert partial.json()["data"]["generated_episode_count"] == 3
+    assert partial.json()["data"]["generated_episode_count"] == 4
     assert generated.status_code == 200
     first_root = ET.parse(first_video.with_suffix(".nfo")).getroot()
     twelfth_root = ET.parse(twelfth_video.with_suffix(".nfo")).getroot()
+    fourteenth_root = ET.parse(fourteenth_video.with_suffix(".nfo")).getroot()
     zero_root = ET.parse(zero_video.with_suffix(".nfo")).getroot()
     assert first_root.findtext("bangumiid") == "episode-111-1"
     assert twelfth_root.findtext("bangumiid") == "episode-222-1"
     assert twelfth_root.findtext("bangumiepisode/subjectid") == "222"
     assert twelfth_root.findtext("episode") == "12"
+    assert fourteenth_root.findtext("bangumiid") == "episode-222-sp-14"
+    assert fourteenth_root.findtext("episode") == "14"
     assert zero_root.findtext("bangumiid") == "episode-333-0"
     assert zero_root.findtext("season") == "2"
     assert zero_root.findtext("episode") == "0"
@@ -1848,3 +1957,138 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
         for source in series_root.findall("cymediaflow/sources/source")
     ]
     assert source_ids == ["111", "222", "333"]
+
+
+def test_segment_mapping_generates_nfo_for_unnumbered_nested_movie_main_file(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Sound Euphonium"
+    season = series / "Season 1"
+    movie = series / "Sound Euphonium The Movie"
+    season.mkdir(parents=True)
+    movie.mkdir()
+    episode_video = season / "Sound Euphonium S01E01.mkv"
+    movie_video = movie / "[Main] Sound Euphonium The Movie.mkv"
+    preview_video = movie / "Preview.mkv"
+    episode_video.write_bytes(b"episode")
+    movie_video.write_bytes(b"movie")
+    preview_video.write_bytes(b"preview")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+        episode_artwork_fallback_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        binding = {
+            "bangumi_id": "115908",
+            "tmdb_id": None,
+            "preferred_title": "Sound Euphonium",
+            "content_kind": "series",
+            "year": 2015,
+            "season_number": 1,
+            "episode_offset": 0,
+            "folder_template": "{title} ({year})/Season {season:02}",
+            "filename_template": "{title} S{season:02}E{episode:02}",
+            "emby_enabled": True,
+            "image_url": None,
+            "metadata": {
+                "primary_provider": "bangumi",
+                "nfo_episode_mapping_mode": "segments",
+            },
+            "provider_subjects": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "115908",
+                    "title": "Sound Euphonium",
+                    "role": "primary",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "152092",
+                    "title": "Sound Euphonium The Movie",
+                    "role": "movie",
+                },
+            ],
+            "episode_source_rules": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "115908",
+                    "local_season": 1,
+                    "local_episode_start": 1,
+                    "local_episode_end": 1,
+                    "provider_episode_start": 1,
+                    "provider_season": 1,
+                    "number_mode": "sort",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "152092",
+                    "local_season": 0,
+                    "local_episode_start": 1,
+                    "local_episode_end": 1,
+                    "provider_episode_start": 1,
+                    "provider_season": 1,
+                    "number_mode": "sort",
+                    "local_path": movie_video.relative_to(series).as_posix(),
+                },
+            ],
+        }
+        saved = client.put(f"/api/v1/media/{media_id}/scrape-config", json=binding)
+        client.app.state.container.bangumi.get_subject = AsyncMock(
+            side_effect=lambda external_id: MetadataCandidate(
+                provider="bangumi",
+                external_id=external_id,
+                title=(
+                    "Sound Euphonium The Movie"
+                    if external_id == "152092"
+                    else "Sound Euphonium"
+                ),
+                original_title=None,
+                year=2016 if external_id == "152092" else 2015,
+                episode_count=1,
+                image_url=None,
+                summary=None,
+            )
+        )
+
+        async def episodes_for(external_id: str, _season_number: int):
+            return (
+                ProviderEpisode(
+                    "589218" if external_id == "152092" else "episode-1",
+                    1,
+                    "The Movie" if external_id == "152092" else "Episode 1",
+                    None,
+                    None,
+                    None,
+                    103 if external_id == "152092" else 24,
+                    subject_id=external_id,
+                    sort_number=1,
+                ),
+            )
+
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            side_effect=episodes_for
+        )
+        client.app.state.container.media_probe.probe = AsyncMock(
+            return_value=MediaProbeResult(None)
+        )
+        generated = client.post(
+            f"/api/v1/media/{media_id}/nfo-generate",
+            json={"confirmed": True, "overwrite_existing": True},
+        )
+
+    assert saved.status_code == 200
+    assert generated.status_code == 200
+    movie_root = ET.parse(movie_video.with_suffix(".nfo")).getroot()
+    assert movie_root.findtext("season") == "0"
+    assert movie_root.findtext("episode") == "1"
+    assert movie_root.findtext("bangumiid") == "589218"
+    assert movie_root.findtext("bangumiepisode/subjectid") == "152092"
+    assert not preview_video.with_suffix(".nfo").exists()

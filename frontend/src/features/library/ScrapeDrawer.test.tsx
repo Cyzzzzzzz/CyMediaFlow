@@ -83,6 +83,7 @@ const detail: MetadataCandidate = {
 
 const suggestion: EpisodeMappingSuggestion = {
   detected_ranges: [{ season_number: 1, episode_start: 1, episode_end: 12, episode_count: 12 }],
+  detected_single_files: [],
   rules: binding.episode_source_rules,
   warnings: [],
 };
@@ -207,6 +208,52 @@ describe("ScrapeDrawer segmented mapping", () => {
       1,
     ));
     expect(await screen.findByText(/已识别 S01 E01–E12，生成 1 条规则/)).toBeTruthy();
+  });
+
+  it("shows an editable file mapping for a detected nested movie main video", async () => {
+    const movieSubject = {
+      provider: "bangumi" as const,
+      external_id: "152092",
+      title: "剧场版 吹响吧！上低音号",
+      original_title: null,
+      image_url: null,
+      role: "movie" as const,
+    };
+    const moviePath = "Sound Euphonium The Movie/[Main] Sound Euphonium The Movie.mkv";
+    vi.mocked(libraryApi.binding).mockResolvedValue({
+      ...binding,
+      provider_subjects: [...binding.provider_subjects, movieSubject],
+    });
+    vi.mocked(libraryApi.suggestEpisodeMapping).mockResolvedValue({
+      detected_ranges: suggestion.detected_ranges,
+      detected_single_files: [{
+        relative_path: moviePath,
+        video_name: "[Main] Sound Euphonium The Movie.mkv",
+        suggested_season: 0,
+        suggested_episode: 1,
+      }],
+      warnings: [],
+      rules: [...binding.episode_source_rules, {
+        provider: "bangumi",
+        external_id: "152092",
+        local_season: 0,
+        local_episode_start: 1,
+        local_episode_end: 1,
+        provider_episode_start: 1,
+        provider_season: 1,
+        number_mode: "sort",
+        local_path: moviePath,
+      }],
+    });
+
+    renderDrawer();
+    await screen.findByText("主作品");
+    fireEvent.click(screen.getByText("季集映射"));
+    fireEvent.click(screen.getByRole("button", { name: "智能生成" }));
+
+    expect(await screen.findByDisplayValue(moviePath)).toBeTruthy();
+    expect(screen.getByText(/\[Main\] Sound Euphonium The Movie\.mkv → S00E01/)).toBeTruthy();
+    expect(screen.getByLabelText("本地集（Emby）")).toBeTruthy();
   });
 
   it("repairs a stale TMDB default and generates from the available Bangumi main work", async () => {

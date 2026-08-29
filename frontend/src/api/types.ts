@@ -39,6 +39,7 @@ export type ProviderEpisode = {
   provider: "bangumi" | "tmdb"; external_id: string; episode_number: number;
   title: string; original_title: string | null; air_date: string | null;
   summary: string | null; runtime_minutes: number | null; image_url: string | null;
+  episode_type?: number; sort_number?: number | null;
 };
 export type ProviderSubjectRole = "primary" | "season" | "season_part" | "movie" | "special" | "related" | "metadata_only";
 export type ProviderSubjectBinding = {
@@ -48,13 +49,17 @@ export type ProviderSubjectBinding = {
 export type EpisodeSourceRule = {
   provider: "bangumi" | "tmdb"; external_id: string; local_season: number;
   local_episode_start: number; local_episode_end: number | null; provider_episode_start: number;
-  provider_season: number; number_mode: "episode" | "sort";
+  provider_season: number; number_mode: "episode" | "sort"; local_path?: string | null;
 };
 export type DetectedEpisodeRange = {
   season_number: number; episode_start: number; episode_end: number; episode_count: number;
 };
+export type DetectedSingleFile = {
+  relative_path: string; video_name: string; suggested_season: number; suggested_episode: number;
+};
 export type EpisodeMappingSuggestion = {
-  rules: EpisodeSourceRule[]; detected_ranges: DetectedEpisodeRange[]; warnings: string[];
+  rules: EpisodeSourceRule[]; detected_ranges: DetectedEpisodeRange[];
+  detected_single_files: DetectedSingleFile[]; warnings: string[];
 };
 export type MediaBinding = {
   bangumi_id: string | null; tmdb_id: string | null; preferred_title: string | null; content_kind: string;

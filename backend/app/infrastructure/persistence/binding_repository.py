@@ -65,6 +65,7 @@ class SqlAlchemyBindingRepository:
                     "provider_episode_start": rule.provider_episode_start,
                     "provider_season": rule.provider_season,
                     "number_mode": rule.number_mode,
+                    "local_path": rule.local_path,
                 }
                 for rule in binding.episode_source_rules
             ]
@@ -158,6 +159,11 @@ class SqlAlchemyBindingRepository:
                         provider_episode_start=int(item.get("provider_episode_start", 1)),
                         provider_season=int(item.get("provider_season", 1)),
                         number_mode=str(item.get("number_mode", "episode")),
+                        local_path=(
+                            str(item["local_path"])
+                            if item.get("local_path") is not None
+                            else None
+                        ),
                     )
                 )
             except (KeyError, TypeError, ValueError):
