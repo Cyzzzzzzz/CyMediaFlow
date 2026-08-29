@@ -1699,11 +1699,10 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
         client.app.state.container.media_probe.probe = AsyncMock(
             return_value=MediaProbeResult(None)
         )
-        blocked = client.post(
+        partial = client.post(
             f"/api/v1/media/{media_id}/nfo-generate",
             json={"confirmed": True, "overwrite_existing": True},
         )
-        assert not (series / "tvshow.nfo").exists()
         generated = client.post(
             f"/api/v1/media/{media_id}/nfo-generate",
             json={
@@ -1715,22 +1714,18 @@ def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers
         )
 
     assert saved.status_code == 200
-    assert blocked.status_code == 409
-    assert blocked.json()["error"]["code"] == "EPISODE_SOURCE_MAPPING_INCOMPLETE"
-    assert blocked.json()["error"]["details"]["entries"] == [
+    assert partial.status_code == 200
+    assert partial.json()["data"]["skipped_files"] == [
         {
-            "path": "Season 1/My Extras/Split Cour Show S01E25.nfo",
+            "relative_path": "Season 1/My Extras/Split Cour Show S01E25.nfo",
             "reason": "EPISODE_SOURCE_NOT_MAPPED",
-            "local_season": 1,
-            "local_episode": 25,
         },
         {
-            "path": "Season 1/Split Cour Show S01E24.nfo",
+            "relative_path": "Season 1/Split Cour Show S01E24.nfo",
             "reason": "EPISODE_SOURCE_NOT_MAPPED",
-            "local_season": 1,
-            "local_episode": 24,
         }
     ]
+    assert partial.json()["data"]["generated_episode_count"] == 3
     assert generated.status_code == 200
     first_root = ET.parse(first_video.with_suffix(".nfo")).getroot()
     twelfth_root = ET.parse(twelfth_video.with_suffix(".nfo")).getroot()

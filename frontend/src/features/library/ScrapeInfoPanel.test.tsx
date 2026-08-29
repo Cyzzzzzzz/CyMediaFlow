@@ -371,4 +371,26 @@ describe("ScrapeInfoPanel", () => {
     expect(screen.getByText("12 项：当前服务未找到 ffmpeg")).toBeTruthy();
     expect(screen.getByRole("link", { name: "到设置页配置媒体工具路径" }).getAttribute("href")).toBe("/settings");
   });
+
+  it("reports unmapped regular episodes as safely skipped after a partial update", () => {
+    render(<ScrapeInfoPanel
+      localInfo={localInfo}
+      providerInfo={undefined}
+      loading={false}
+      error={false}
+      generationResult={{
+        media_id: "anime-1", bangumi_id: "414214", provider: "bangumi", external_id: "414214",
+        created_files: [], updated_files: ["Season 1/E01.nfo"], locked_fields: [],
+        created_artwork_files: [], generated_episode_count: 1, probe_warnings: [],
+        artwork_warnings: [],
+        skipped_files: [{
+          relative_path: "Season 1/E02.nfo",
+          reason: "EPISODE_SOURCE_NOT_MAPPED",
+        }],
+      }}
+    />);
+
+    expect(screen.getByText(/跳过 1 个未处理文件/)).toBeTruthy();
+    expect(screen.getByText("1 项：未配置覆盖该正片的分段来源，已安全跳过")).toBeTruthy();
+  });
 });

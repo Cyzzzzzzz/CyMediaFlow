@@ -288,15 +288,16 @@ function providerArtworkSource(mediaId: string, category: string, externalId: st
 
 function GenerationDiagnostics({ result }: { result: NfoGenerationResult }) {
   const warnings = [...result.probe_warnings, ...result.artwork_warnings];
-  const counts = warnings.reduce<Record<string, number>>((current, warning) => {
-    current[warning.reason] = (current[warning.reason] ?? 0) + 1;
+  const diagnostics = [...result.skipped_files, ...warnings];
+  const counts = diagnostics.reduce<Record<string, number>>((current, diagnostic) => {
+    current[diagnostic.reason] = (current[diagnostic.reason] ?? 0) + 1;
     return current;
   }, {});
   const unavailable = "FFPROBE_UNAVAILABLE" in counts || "FFMPEG_UNAVAILABLE" in counts;
 
   return <>
-    <p className="nfo-generation-result"><FilePlus size={16} />已创建 {result.created_files.length} 个、更新 {result.updated_files.length} 个 NFO，并保存 {result.created_artwork_files.length} 张本地图片{result.probe_warnings.length ? `；${result.probe_warnings.length} 个媒体文件未取得流信息` : ""}{result.artwork_warnings.length ? `；${result.artwork_warnings.length} 张图片处理失败` : ""}。</p>
-    {warnings.length ? <div className="nfo-generation-diagnostic">
+    <p className="nfo-generation-result"><FilePlus size={16} />已创建 {result.created_files.length} 个、更新 {result.updated_files.length} 个 NFO，并保存 {result.created_artwork_files.length} 张本地图片{result.skipped_files.length ? `；跳过 ${result.skipped_files.length} 个未处理文件` : ""}{result.probe_warnings.length ? `；${result.probe_warnings.length} 个媒体文件未取得流信息` : ""}{result.artwork_warnings.length ? `；${result.artwork_warnings.length} 张图片处理失败` : ""}。</p>
+    {diagnostics.length ? <div className="nfo-generation-diagnostic">
       {Object.entries(counts).map(([reason, count]) => <span key={reason}>{count} 项：{generationWarningText(reason)}</span>)}
       {unavailable ? <a href="/settings">到设置页配置媒体工具路径</a> : null}
     </div> : null}
@@ -320,6 +321,12 @@ function generationWarningText(reason: string) {
     REMOTE_ARTWORK_URL_REJECTED: "远程图片地址不属于允许的元数据来源",
     REMOTE_ARTWORK_DOWNLOAD_FAILED: "远程图片下载失败",
     REMOTE_ARTWORK_INVALID: "远程图片格式或内容无效",
+    EPISODE_SOURCE_NOT_MAPPED: "未配置覆盖该正片的分段来源，已安全跳过",
+    PROVIDER_EPISODE_NOT_FOUND: "远程条目中没有对应分集，已安全跳过",
+    LOCAL_EPISODE_NOT_RECOGNIZED: "无法从本地文件识别集号，已安全跳过",
+    INVALID_LOCAL_EPISODE_NUMBER: "映射后的本地集号无效，已安全跳过",
+    NOT_SELECTED: "未在 NFO 预览中选择",
+    NOT_UPDATEABLE: "当前 NFO 状态不可更新",
   };
   return messages[reason] ?? reason;
 }

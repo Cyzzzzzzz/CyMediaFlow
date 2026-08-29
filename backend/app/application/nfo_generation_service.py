@@ -228,15 +228,6 @@ class NfoGenerationService:
                 "单文件剧场版/特别篇映射要求目录内恰好有一个常规视频文件",
                 {"regular_video_count": len(regular_entries)},
             )
-        if mapping.uses_source_rules:
-            self._validate_segment_sources(
-                regular_entries,
-                excluded,
-                excluded_folder_set,
-                source_rules,
-                source_cache,
-                configured_season,
-            )
         locks = tuple(dict.fromkeys(locked_fields))
         values = manual_values or {}
         documents: dict[Path, str] = {}
@@ -304,11 +295,19 @@ class NfoGenerationService:
         season_directories: dict[Path, int] = {}
         season_sources: dict[int, list[_LoadedSource]] = {}
         for entry in preview.entries:
-            if entry.category != "regular" or (
+            if entry.category != "regular":
+                continue
+            if (
                 not mapping.is_single
                 and entry.parsed.episode_start is None
                 and entry.parsed.absolute_episode_start is None
             ):
+                skipped.append(
+                    NfoGenerationSkip(
+                        entry.target_nfo_relative_path,
+                        "LOCAL_EPISODE_NOT_RECOGNIZED",
+                    )
+                )
                 continue
             local_season = configured_season
             if mapping.uses_source_rules:
@@ -320,7 +319,13 @@ class NfoGenerationService:
             if not self._selected(
                 entry, excluded, excluded_folder_set, included, overwrite_existing
             ):
-                skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_SELECTED"))
+                reason = (
+                    "EPISODE_SOURCE_NOT_MAPPED"
+                    if mapping.uses_source_rules
+                    and entry.selection_reason == "EPISODE_SOURCE_NOT_MAPPED"
+                    else "NOT_SELECTED"
+                )
+                skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, reason))
                 continue
             if entry.action != "create" and not (
                 overwrite_existing and entry.action == "unchanged"
@@ -616,79 +621,6 @@ class NfoGenerationService:
             (episode for episode in episodes if episode.episode_number == number),
             None,
         )
-
-    def _validate_segment_sources(
-        self,
-        entries: list[NfoPreviewEntry],
-        excluded: set[str],
-        excluded_folders: set[str],
-        rules: tuple[EpisodeSourceRule, ...],
-        source_cache: dict[tuple[str, str, int], _LoadedSource],
-        configured_season: int,
-    ) -> None:
-        problems: list[dict[str, object]] = []
-        for entry in entries:
-            relative_path = entry.target_nfo_relative_path
-            if self._normalize_relative(relative_path) in excluded:
-                continue
-            if self._folder_is_excluded(entry.folder, excluded_folders):
-                continue
-            parsed_episode = (
-                entry.parsed.episode_start
-                if entry.parsed.episode_start is not None
-                else entry.parsed.absolute_episode_start
-            )
-            if parsed_episode is None:
-                problems.append(
-                    {"path": relative_path, "reason": "LOCAL_EPISODE_NOT_RECOGNIZED"}
-                )
-                continue
-            local_season = resolve_local_season(
-                entry.video_relative_path,
-                entry.parsed.season,
-                configured_season,
-            )
-            source_rule = self._matching_source_rule(rules, local_season, parsed_episode)
-            if source_rule is None:
-                problems.append(
-                    {
-                        "path": relative_path,
-                        "reason": "EPISODE_SOURCE_NOT_MAPPED",
-                        "local_season": local_season,
-                        "local_episode": parsed_episode,
-                    }
-                )
-                continue
-            source_key = self._source_key(
-                source_rule.provider,
-                source_rule.external_id,
-                source_rule.provider_season,
-            )
-            loaded_source = source_cache[source_key]
-            provider_number = source_rule.provider_episode_number(parsed_episode)
-            if self._find_provider_episode(
-                loaded_source.episodes,
-                provider_number,
-                source_rule.number_mode,
-            ) is None:
-                problems.append(
-                    {
-                        "path": relative_path,
-                        "reason": "PROVIDER_EPISODE_NOT_FOUND",
-                        "local_season": local_season,
-                        "local_episode": parsed_episode,
-                        "provider": source_rule.provider,
-                        "external_id": source_rule.external_id,
-                        "provider_episode": provider_number,
-                        "number_mode": source_rule.number_mode,
-                    }
-                )
-        if problems:
-            raise NfoGenerationError(
-                "EPISODE_SOURCE_MAPPING_INCOMPLETE",
-                "分段映射仍有正片未匹配；请补充规则或在 NFO 预览中明确跳过后再生成",
-                {"entries": problems},
-            )
 
     @staticmethod
     def _parsed_episode(entry: NfoPreviewEntry) -> int:
