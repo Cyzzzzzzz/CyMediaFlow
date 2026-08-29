@@ -31,6 +31,7 @@ type Props = {
   providerEpisodesError?: boolean;
   seasonNumber?: number;
   episodeOffset?: number;
+  localEpisodeOffset?: number;
   loading: boolean;
   error: boolean;
   onGenerate?: () => void;
@@ -54,7 +55,7 @@ type Props = {
   artworkRevision?: number;
 };
 
-export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, generationProvider, localInfo, providerInfo, bangumiSeasonGroups = [], providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationErrorMessage, generationResult, canGenerateNfo, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange, onExtractSeasonArtwork, extractingArtworkSeason = null, artworkExtractionResult, artworkExtractionErrorSeason = null, artworkRevision = 0 }: Props) {
+export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, generationProvider, localInfo, providerInfo, bangumiSeasonGroups = [], providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, localEpisodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationErrorMessage, generationResult, canGenerateNfo, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange, onExtractSeasonArtwork, extractingArtworkSeason = null, artworkExtractionResult, artworkExtractionErrorSeason = null, artworkRevision = 0 }: Props) {
   const [generationArmed, setGenerationArmed] = useState(false);
   const [expandedEpisode, setExpandedEpisode] = useState<string | null>(null);
   const localSeries = localInfo?.series;
@@ -70,7 +71,8 @@ export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, ge
   const nfoProvider = generationProvider ?? generationResult?.provider ?? activeProvider;
   const nfoProviderName = nfoProvider === "tmdb" ? "TMDB" : "Bangumi";
   const displaySeasons = mergeEpisodeMetadata(
-    localInfo?.seasons ?? [], providerEpisodes, seasonNumber, episodeOffset, activeProvider,
+    localInfo?.seasons ?? [], providerEpisodes, seasonNumber, episodeOffset,
+    localEpisodeOffset, activeProvider,
     localSeasonNumbers,
   );
 
@@ -381,9 +383,13 @@ function mergeEpisodeMetadata(
   remoteEpisodes: ProviderEpisode[],
   configuredSeason: number,
   episodeOffset: number,
+  localEpisodeOffset: number,
   provider: "bangumi" | "tmdb",
   localSeasonNumbers: number[] = [],
 ): DisplaySeason[] {
+  // Parsed file P maps to provider P + episodeOffset and Emby P + localEpisodeOffset.
+  // Therefore a displayed Emby episode L maps to provider L + this delta.
+  const providerEpisodeDelta = episodeOffset - localEpisodeOffset;
   const remoteByNumber = new Map(remoteEpisodes.map((episode) => [episode.episode_number, episode]));
   const remoteByIdentity = new Map(
     remoteEpisodes.map((episode) => [providerIdentity(episode.provider, episode.external_id), episode]),
@@ -396,7 +402,7 @@ function mergeEpisodeMetadata(
       .map((identity) => remoteByIdentity.get(providerIdentity(identity.provider, identity.external_id)))
       .find((candidate) => candidate !== undefined)
       ?? (providerIds.length === 0 && episode.season_number === configuredSeason
-        ? remoteByNumber.get(episode.episode_number + episodeOffset)
+        ? remoteByNumber.get(episode.episode_number + providerEpisodeDelta)
         : undefined);
     const localArtwork = episode.poster_source === "local";
     return {
@@ -426,10 +432,10 @@ function mergeEpisodeMetadata(
   const selectedSeason = seasons.find((season) => season.season_number === configuredSeason);
   if (selectedSeason) {
     const mappedRemote = new Set(
-      selectedSeason.episodes.map((episode) => episode.episode_number + episodeOffset),
+      selectedSeason.episodes.map((episode) => episode.episode_number + providerEpisodeDelta),
     );
     for (const remote of remoteEpisodes) {
-      const localNumber = remote.episode_number - episodeOffset;
+      const localNumber = remote.episode_number - providerEpisodeDelta;
       if (mappedRemote.has(remote.episode_number) || localNumber < 1) continue;
       selectedSeason.episodes.push(remoteDisplayEpisode(remote, configuredSeason, localNumber));
     }
@@ -453,7 +459,7 @@ function mergeEpisodeMetadata(
     poster_source: "missing",
     episodes: remoteEpisodes
       .map((episode) => remoteDisplayEpisode(
-        episode, configuredSeason, episode.episode_number - episodeOffset,
+        episode, configuredSeason, episode.episode_number - providerEpisodeDelta,
       ))
       .filter((episode) => episode.episode_number > 0),
     remoteOnly: true,

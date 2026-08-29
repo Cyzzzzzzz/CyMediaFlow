@@ -482,6 +482,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
             providerEpisodesError={metadataEpisodes.isError}
             seasonNumber={form.season_number}
             episodeOffset={form.episode_offset}
+            localEpisodeOffset={episodeMappingMode === "manual" ? localEpisodeOffset : 0}
             loading={scrapeInfo.isLoading || metadataDetail.isLoading}
             error={scrapeInfo.isError && metadataDetail.isError}
             onGenerate={() => generateNfo.mutate()}

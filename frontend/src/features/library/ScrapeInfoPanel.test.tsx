@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LocalScrapeInfo } from "../../api/types";
@@ -240,6 +240,57 @@ describe("ScrapeInfoPanel", () => {
     expect(screen.getByText("远程第一季第一集")).toBeTruthy();
     expect(screen.getByText("本地第二季第一集")).toBeTruthy();
     expect(screen.queryByText("本地第一季第一集")).toBeNull();
+  });
+
+  it("applies both Emby and provider offsets when merging remote episode previews", () => {
+    const localEpisodes = Array.from({ length: 8 }, (_, index) => ({
+      ...localInfo.seasons[0].episodes[0],
+      season_number: 2,
+      episode_number: index + 1,
+      title: `本地第 ${index + 1} 集`,
+      external_ids: [{ provider: "bangumi", external_id: `remote-${index + 1}` }],
+      nfo_relative_path: `Season 2/E${String(index + 1).padStart(2, "0")}.nfo`,
+    }));
+    const remoteEpisodes = Array.from({ length: 13 }, (_, index) => ({
+      provider: "bangumi" as const,
+      external_id: `remote-${index + 1}`,
+      episode_number: index + 1,
+      title: `远程第 ${index + 1} 集`,
+      original_title: null,
+      air_date: null,
+      summary: null,
+      runtime_minutes: 24,
+      image_url: null,
+    }));
+    const season2Info: LocalScrapeInfo = {
+      ...localInfo,
+      seasons: [{
+        ...localInfo.seasons[0],
+        season_number: 2,
+        title: "相反的你和我 第二季",
+        nfo_relative_path: "Season 2/season.nfo",
+        episodes: localEpisodes,
+      }],
+    };
+
+    render(<ScrapeInfoPanel
+      provider="bangumi"
+      localInfo={season2Info}
+      providerInfo={undefined}
+      providerEpisodes={remoteEpisodes}
+      seasonNumber={2}
+      episodeOffset={-12}
+      localEpisodeOffset={-12}
+      loading={false}
+      error={false}
+    />);
+
+    const preview = screen.getByLabelText("第 2 季剧集");
+    expect(within(preview).getAllByRole("button")).toHaveLength(13);
+    expect(within(preview).getByText("S02E01")).toBeTruthy();
+    expect(within(preview).getByText("S02E13")).toBeTruthy();
+    expect(within(preview).queryByText("S02E14")).toBeNull();
+    expect(within(preview).queryByText("S02E25")).toBeNull();
   });
 
   it("batch locks each series, season, and episode field group independently", () => {
