@@ -41,6 +41,7 @@ class _RemoteArtworkRequest:
     relative_hint: str
     fallback_video: Path | None = None
     fallback_duration: float | None = None
+    overwrite_existing: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,10 +472,11 @@ class NfoGenerationService:
                     ),
                     None,
                 ) or self._nfo_artwork_urls(season_target).get("poster") or season_subject.image_url
+                directory_is_root = (
+                    directory.resolve(strict=False) == item.root_path.resolve(strict=False)
+                )
                 season_stem = (
-                    "poster"
-                    if directory.resolve(strict=False) != item.root_path.resolve(strict=False)
-                    else f"season{local_season:02}-poster"
+                    f"season{local_season:02}-poster" if directory_is_root else "poster"
                 )
                 self._queue_remote_artwork(
                     remote_artwork_requests,
@@ -482,7 +484,18 @@ class NfoGenerationService:
                     directory,
                     season_stem,
                     f"{directory.relative_to(item.root_path).as_posix()}/{season_stem}",
+                    overwrite_existing=overwrite_existing,
                 )
+                if not directory_is_root:
+                    root_stem = f"season{local_season:02}-poster"
+                    self._queue_remote_artwork(
+                        remote_artwork_requests,
+                        season_image_url,
+                        item.root_path,
+                        root_stem,
+                        root_stem,
+                        overwrite_existing=overwrite_existing,
+                    )
             self._queue_document(
                 documents,
                 skipped,
@@ -703,18 +716,29 @@ class NfoGenerationService:
                 warning_code = outcome.warning_code or "REMOTE_ARTWORK_INVALID"
             else:
                 target = request.directory / f"{request.stem}{outcome.extension}"
+                temporary = request.directory / (
+                    f".{request.stem}.{uuid4().hex}{outcome.extension}.tmp"
+                )
                 try:
                     request.directory.mkdir(parents=True, exist_ok=True)
                     self._ensure_metadata_ignore_marker(root, request.directory)
-                    with target.open("xb") as handle:
+                    write_target = temporary if request.overwrite_existing else target
+                    with write_target.open("xb") as handle:
                         handle.write(outcome.content)
                         handle.flush()
                         os.fsync(handle.fileno())
+                    if request.overwrite_existing:
+                        os.replace(temporary, target)
+                        for extension in IMAGE_EXTENSIONS:
+                            alternate = request.directory / f"{request.stem}{extension}"
+                            if alternate != target:
+                                with suppress(OSError):
+                                    alternate.unlink()
                 except FileExistsError:
                     continue
                 except OSError:
                     with suppress(OSError):
-                        target.unlink()
+                        temporary.unlink()
                     warning_code = "ARTWORK_WRITE_FAILED"
                 else:
                     created.append(target)
@@ -848,8 +872,14 @@ class NfoGenerationService:
         skip: bool = False,
         fallback_video: Path | None = None,
         fallback_duration: float | None = None,
+        overwrite_existing: bool = False,
     ) -> None:
-        if skip or not url or self._artwork_stem_exists(directory, stem):
+        if (
+            skip
+            or not url
+            or any(request.directory == directory and request.stem == stem for request in requests)
+            or (not overwrite_existing and self._artwork_stem_exists(directory, stem))
+        ):
             return
         requests.append(
             _RemoteArtworkRequest(
@@ -859,6 +889,7 @@ class NfoGenerationService:
                 relative_hint,
                 fallback_video,
                 fallback_duration,
+                overwrite_existing,
             )
         )
 

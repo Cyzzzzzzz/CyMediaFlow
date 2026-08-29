@@ -138,6 +138,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
       return libraryApi.generateNfo(item.id, savedBinding, savedProvider, savedExternalId);
     },
     onSuccess: () => {
+      setArtworkRevision(Date.now());
       void client.invalidateQueries({ queryKey: ["scrape-info", item.id] });
       void client.invalidateQueries({ queryKey: ["nfo-preview", item.id] });
       void client.invalidateQueries({ queryKey: ["library"] });

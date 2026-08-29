@@ -1272,6 +1272,7 @@ def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
     }
     assert set(result["created_artwork_files"]) == {
         "poster.jpg",
+        "season01-poster.jpg",
         "Season 1/poster.jpg",
         "Season 1/Example Show S01E01-thumb.jpg",
         ".cymediaflow/artwork/persons/10.jpg",
@@ -1280,6 +1281,7 @@ def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
         ".cymediaflow/artwork/related/40.jpg",
     }
     assert (series / "poster.jpg").read_bytes() == b"remote-poster"
+    assert (series / "season01-poster.jpg").read_bytes() == b"remote-poster"
     assert (series / ".cymediaflow" / ".ignore").is_file()
     assert existing_after_create == ("<episodedetails><title>保留原内容</title></episodedetails>")
     assert updated.status_code == 200
@@ -1291,7 +1293,10 @@ def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
         "Season 1/Example Show S01E02.nfo",
     }
     assert update_result["locked_fields"] == ["series.title", "episodes.title"]
-    assert update_result["created_artwork_files"] == []
+    assert set(update_result["created_artwork_files"]) == {
+        "season01-poster.jpg",
+        "Season 1/poster.jpg",
+    }
     assert ET.parse(series / "tvshow.nfo").getroot().findtext("title") == "我的自定义标题"
     assert ET.parse(existing_nfo).getroot().findtext("title") == "保留原内容"
     assert not extra_video.with_suffix(".nfo").exists()
@@ -1340,6 +1345,9 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
     second_video = season / "Example Show S02E02.mkv"
     video.write_bytes(b"episode")
     second_video.write_bytes(b"episode-two")
+    (series / "poster.jpg").write_bytes(b"existing-series-poster")
+    (season / "poster.jpg").write_bytes(b"stale-season-poster")
+    (series / "season02-poster.jpg").write_bytes(b"wrong-first-season-poster")
     settings = Settings(
         media_root=media_root,
         allowed_media_root=media_root,
@@ -1422,15 +1430,16 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
                 "provider": "tmdb",
                 "tmdb_id": "100",
                 "season_number": 2,
+                "overwrite_existing": True,
             },
         )
 
     assert response.status_code == 200
     result = response.json()["data"]
     assert set(result["created_artwork_files"]) == {
-        "poster.jpg",
         "fanart.jpg",
         "clearlogo.png",
+        "season02-poster.jpg",
         "Season 2/poster.jpg",
         "Season 2/Example Show S02E01-thumb.jpg",
     }
@@ -1440,10 +1449,12 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
             "reason": "REMOTE_ARTWORK_DOWNLOAD_FAILED",
         }
     ]
-    assert (series / "poster.jpg").is_file()
+    assert (series / "poster.jpg").read_bytes() == b"existing-series-poster"
     assert (series / "fanart.jpg").is_file()
     assert (series / "clearlogo.png").read_bytes() == b"logo"
-    assert (season / "poster.jpg").is_file()
+    expected_season_poster = b"https://image.tmdb.org/t/p/w500/season.jpg"
+    assert (season / "poster.jpg").read_bytes() == expected_season_poster
+    assert (series / "season02-poster.jpg").read_bytes() == expected_season_poster
     assert video.with_name(f"{video.stem}-thumb.jpg").is_file()
     assert not second_video.with_name(f"{second_video.stem}-thumb.jpg").exists()
     series_nfo = ET.parse(series / "tvshow.nfo").getroot()

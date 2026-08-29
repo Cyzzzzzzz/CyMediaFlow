@@ -31,11 +31,11 @@ const localInfo: LocalScrapeInfo = {
 describe("ScrapeInfoPanel", () => {
   it("shows separate series, season, and episode metadata with artwork", () => {
     const onScrapeMetadata = vi.fn();
-    render(<ScrapeInfoPanel localInfo={localInfo} providerInfo={undefined} loading={false} error={false} canScrapeMetadata onScrapeMetadata={onScrapeMetadata} />);
+    render(<ScrapeInfoPanel localInfo={localInfo} providerInfo={undefined} loading={false} error={false} canScrapeMetadata onScrapeMetadata={onScrapeMetadata} artworkRevision={123} />);
 
     expect(screen.getByText("家里蹲吸血姬的苦闷")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "家里蹲吸血姬的苦闷 剧集海报" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "第 1 季海报" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "家里蹲吸血姬的苦闷 剧集海报" }).getAttribute("src")).toContain("v=123");
+    expect(screen.getByRole("img", { name: "第 1 季海报" }).getAttribute("src")).toContain("v=123");
     expect(screen.getByText("沿用剧集海报")).toBeTruthy();
     expect(screen.getByRole("img", { name: "第 1 集海报" })).toBeTruthy();
     expect(screen.getByText("家里蹲吸血鬼出门去")).toBeTruthy();

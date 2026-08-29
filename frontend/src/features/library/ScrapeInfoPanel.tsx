@@ -90,7 +90,7 @@ export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, ge
       {scrapeMetadataError ? <span className="metadata-scrape-status error">远程读取失败，请检查 {metadataProviderName} 连接</span> : null}
     </section>
     <section className="scrape-series-card">
-      <Artwork className="series-artwork" url={posterUrl} alt={`${title} 剧集海报`} />
+      <Artwork className="series-artwork" url={withArtworkRevision(posterUrl, artworkRevision)} alt={`${title} 剧集海报`} />
       <div className="scrape-series-main">
         <div className="scrape-level"><span>剧集</span><small>{localSeries ? "本地 tvshow.nfo" : `${providerInfo?.provider === "tmdb" ? "TMDB" : "Bangumi"} #${providerInfo?.external_id}`}</small></div>
         <h3>{title}</h3>
@@ -136,7 +136,7 @@ export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, ge
         const extracting = extractingArtworkSeason === season.season_number;
         return <section className="scrape-season-card" key={season.season_number}>
         <div className="season-summary">
-          <Artwork className="season-artwork" url={season.poster_url ?? posterUrl} alt={`第 ${season.season_number} 季海报`} />
+          <Artwork className="season-artwork" url={withArtworkRevision(season.poster_url ?? posterUrl, artworkRevision)} alt={`第 ${season.season_number} 季海报`} />
           <div className="season-summary-copy"><span className="scrape-level-label">季度</span><h4>第 {season.season_number} 季</h4><p>{season.episodes.length} 集{season.year ? ` · ${season.year}` : ""}</p><small>{season.remoteOnly ? `${metadataProviderName} 分集数据` : posterSourceText(season.poster_source, !!posterUrl)}</small></div>
           <button
             className="preview-refresh season-artwork-action"
