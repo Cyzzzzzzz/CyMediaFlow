@@ -10,6 +10,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.container import Container
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
@@ -42,6 +43,10 @@ def get_episode_mapping_suggestion_service(
 
 def get_provider_artwork_cache(request: Request) -> ProviderArtworkCache:
     return get_container(request).provider_artwork_cache
+
+
+def get_season_artwork_service(request: Request) -> SeasonArtworkExtractionService:
+    return get_container(request).season_artwork_service
 
 
 def get_result_cache(request: Request) -> SqlAlchemyResultCache:

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi import Path as PathParameter
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
@@ -14,6 +15,7 @@ from app.api.dependencies import (
     get_nfo_service,
     get_provider_artwork_cache,
     get_result_cache,
+    get_season_artwork_service,
 )
 from app.api.response import ok
 from app.api.schemas import (
@@ -33,6 +35,7 @@ from app.api.schemas import (
     NfoPreviewView,
     ProviderEpisodeView,
     ScrapeBindingView,
+    SeasonArtworkExtractionResultView,
 )
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
@@ -42,6 +45,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -133,6 +137,24 @@ def get_episode_artwork(
 ) -> FileResponse:
     return FileResponse(
         service.get_scrape_artwork(media_id, "episode", season_number, episode_number)
+    )
+
+
+@router.post("/{media_id}/artwork/seasons/{season_number}/extract")
+async def extract_season_episode_artwork(
+    media_id: str,
+    season_number: Annotated[int, PathParameter(ge=0, le=99)],
+    request: Request,
+    service: Annotated[
+        SeasonArtworkExtractionService, Depends(get_season_artwork_service)
+    ],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+) -> dict[str, object]:
+    result = await service.extract(media_id, season_number)
+    cache.delete(media_id, ("scrape-info",))
+    return ok(
+        request,
+        SeasonArtworkExtractionResultView.from_domain(result).model_dump(mode="json"),
     )
 
 

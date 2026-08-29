@@ -50,6 +50,7 @@ class EpisodeArtworkGeneratorPort(Protocol):
         video_path: Path,
         output_path: Path,
         duration_seconds: float | None = None,
+        overwrite_existing: bool = False,
     ) -> ArtworkGenerationResult: ...
 
 

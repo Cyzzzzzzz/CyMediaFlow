@@ -1,8 +1,8 @@
-import { ArrowsClockwise, CalendarBlank, FilePlus, FilmSlate, Star } from "@phosphor-icons/react";
+import { ArrowsClockwise, CalendarBlank, Camera, FilePlus, FilmSlate, Star } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 
 import { imageSource } from "../../api/images";
-import type { EpisodeScrapeInfo, LocalScrapeInfo, MetadataCandidate, NfoGenerationResult, ProviderEpisode, SeasonScrapeInfo } from "../../api/types";
+import type { EpisodeScrapeInfo, LocalScrapeInfo, MetadataCandidate, NfoGenerationResult, ProviderEpisode, SeasonArtworkExtractionResult, SeasonScrapeInfo } from "../../api/types";
 import { NfoFieldPolicyEditor } from "./NfoFieldPolicyEditor";
 
 export type BangumiSeasonMetadataGroup = {
@@ -20,6 +20,7 @@ export type BangumiSeasonMetadataGroup = {
 
 type Props = {
   mediaId?: string;
+  localSeasonNumbers?: number[];
   provider?: "bangumi" | "tmdb";
   generationProvider?: "bangumi" | "tmdb";
   localInfo: LocalScrapeInfo | undefined;
@@ -46,9 +47,14 @@ type Props = {
   lockedFields?: string[];
   manualValues?: Record<string, unknown>;
   onFieldPolicyChange?: (lockedFields: string[], manualValues: Record<string, unknown>) => void;
+  onExtractSeasonArtwork?: (seasonNumber: number) => void;
+  extractingArtworkSeason?: number | null;
+  artworkExtractionResult?: SeasonArtworkExtractionResult;
+  artworkExtractionErrorSeason?: number | null;
+  artworkRevision?: number;
 };
 
-export function ScrapeInfoPanel({ mediaId, provider, generationProvider, localInfo, providerInfo, bangumiSeasonGroups = [], providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationErrorMessage, generationResult, canGenerateNfo, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange }: Props) {
+export function ScrapeInfoPanel({ mediaId, localSeasonNumbers = [], provider, generationProvider, localInfo, providerInfo, bangumiSeasonGroups = [], providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationErrorMessage, generationResult, canGenerateNfo, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange, onExtractSeasonArtwork, extractingArtworkSeason = null, artworkExtractionResult, artworkExtractionErrorSeason = null, artworkRevision = 0 }: Props) {
   const [generationArmed, setGenerationArmed] = useState(false);
   const [expandedEpisode, setExpandedEpisode] = useState<string | null>(null);
   const localSeries = localInfo?.series;
@@ -65,6 +71,7 @@ export function ScrapeInfoPanel({ mediaId, provider, generationProvider, localIn
   const nfoProviderName = nfoProvider === "tmdb" ? "TMDB" : "Bangumi";
   const displaySeasons = mergeEpisodeMetadata(
     localInfo?.seasons ?? [], providerEpisodes, seasonNumber, episodeOffset, activeProvider,
+    localSeasonNumbers,
   );
 
   useEffect(() => {
@@ -123,19 +130,36 @@ export function ScrapeInfoPanel({ mediaId, provider, generationProvider, localIn
     {displaySeasons.length ? <div className="scrape-season-list">
       {displaySeasons.map((season) => {
         const selected = season.episodes.find((episode) => episode.key === expandedEpisode);
+        const extractionResult = artworkExtractionResult?.season_number === season.season_number
+          ? artworkExtractionResult
+          : undefined;
+        const extracting = extractingArtworkSeason === season.season_number;
         return <section className="scrape-season-card" key={season.season_number}>
         <div className="season-summary">
           <Artwork className="season-artwork" url={season.poster_url ?? posterUrl} alt={`第 ${season.season_number} 季海报`} />
-          <div><span className="scrape-level-label">季度</span><h4>第 {season.season_number} 季</h4><p>{season.episodes.length} 集{season.year ? ` · ${season.year}` : ""}</p><small>{season.remoteOnly ? `${metadataProviderName} 分集数据` : posterSourceText(season.poster_source, !!posterUrl)}</small></div>
+          <div className="season-summary-copy"><span className="scrape-level-label">季度</span><h4>第 {season.season_number} 季</h4><p>{season.episodes.length} 集{season.year ? ` · ${season.year}` : ""}</p><small>{season.remoteOnly ? `${metadataProviderName} 分集数据` : posterSourceText(season.poster_source, !!posterUrl)}</small></div>
+          <button
+            className="preview-refresh season-artwork-action"
+            type="button"
+            aria-label={`提取第 ${season.season_number} 季剧集封面`}
+            title={season.remoteOnly ? "该季度只有远程数据，未发现本地季度" : "从本地正片重新截图，并覆盖已有分集侧边图"}
+            onClick={() => onExtractSeasonArtwork?.(season.season_number)}
+            disabled={season.remoteOnly || !onExtractSeasonArtwork || extractingArtworkSeason !== null}
+          >
+            <Camera size={15} className={extracting ? "pulse" : ""} />
+            {extracting ? "提取中…" : "提取剧集封面"}
+          </button>
         </div>
+        {extractionResult ? <p className={`season-artwork-status ${extractionResult.failed_files.length ? "warning" : "success"}`}>{artworkExtractionSummary(extractionResult)}</p> : null}
+        {artworkExtractionErrorSeason === season.season_number ? <p className="season-artwork-status error">提取失败，请检查 ffmpeg 配置和媒体目录写入权限。</p> : null}
         {season.plot ? <p className="season-plot">{season.plot}</p> : null}
         {season.episodes.length ? <div className="episode-strip" aria-label={`第 ${season.season_number} 季剧集`}>
           {season.episodes.map((episode) => <button className={`episode-card ${expandedEpisode === episode.key ? "expanded" : ""}`} key={episode.key} type="button" aria-expanded={expandedEpisode === episode.key} onClick={() => setExpandedEpisode((current) => current === episode.key ? null : episode.key)} title={episode.plot ?? undefined}>
-            <Artwork className="episode-artwork" url={episode.poster_url} alt={`第 ${episode.episode_number} 集海报`} />
+            <Artwork className="episode-artwork" url={withArtworkRevision(episode.poster_url, artworkRevision)} alt={`第 ${episode.episode_number} 集海报`} />
             <div><span>S{pad(episode.season_number)}E{pad(episode.episode_number)}</span><strong>{episode.title}</strong><small>{episode.aired || (episode.runtime ? `${episode.runtime} 分钟` : "本地 NFO")}</small></div>
           </button>)}
         </div> : <p className="subtle">该季度尚未发现分集 NFO。</p>}
-        {selected ? <EpisodeMetadataDetail episode={selected} providerName={metadataProviderName} /> : null}
+        {selected ? <EpisodeMetadataDetail episode={selected} providerName={metadataProviderName} artworkRevision={artworkRevision} /> : null}
       </section>})}
       {providerEpisodesLoading ? <p className="subtle">正在读取 {metadataProviderName} 分集数据与剧照…</p> : null}
       {providerEpisodesError ? <p className="notice">{metadataProviderName} 分集数据读取失败；仍显示可用的本地 NFO 和图片。</p> : null}
@@ -358,6 +382,7 @@ function mergeEpisodeMetadata(
   configuredSeason: number,
   episodeOffset: number,
   provider: "bangumi" | "tmdb",
+  localSeasonNumbers: number[] = [],
 ): DisplaySeason[] {
   const remoteByNumber = new Map(remoteEpisodes.map((episode) => [episode.episode_number, episode]));
   const remoteByIdentity = new Map(
@@ -393,6 +418,11 @@ function mergeEpisodeMetadata(
     episodes: season.episodes.map(mergeEpisode),
     remoteOnly: false,
   }));
+  for (const localSeasonNumber of localSeasonNumbers) {
+    if (seasons.some((season) => season.season_number === localSeasonNumber)) continue;
+    seasons.push(emptyDisplaySeason(localSeasonNumber));
+  }
+  seasons.sort((left, right) => left.season_number - right.season_number);
   const selectedSeason = seasons.find((season) => season.season_number === configuredSeason);
   if (selectedSeason) {
     const mappedRemote = new Set(
@@ -431,6 +461,26 @@ function mergeEpisodeMetadata(
   return seasons;
 }
 
+function emptyDisplaySeason(seasonNumber: number): DisplaySeason {
+  return {
+    season_number: seasonNumber,
+    title: null,
+    original_title: null,
+    plot: null,
+    year: null,
+    premiered: null,
+    cast: [],
+    external_ids: [],
+    artwork: [],
+    provider_data: null,
+    nfo_relative_path: null,
+    poster_url: null,
+    poster_source: "missing",
+    episodes: [],
+    remoteOnly: false,
+  };
+}
+
 function remoteDisplayEpisode(
   episode: ProviderEpisode,
   seasonNumber: number,
@@ -457,7 +507,7 @@ function providerIdentity(provider: string, externalId: string) {
   return `${provider.toLocaleLowerCase()}:${externalId}`;
 }
 
-function EpisodeMetadataDetail({ episode, providerName }: { episode: DisplayEpisode; providerName: string }) {
+function EpisodeMetadataDetail({ episode, providerName, artworkRevision }: { episode: DisplayEpisode; providerName: string; artworkRevision: number }) {
   const remote = episode.providerEpisode;
   const identityMap = new Map(
     episode.external_ids.map((identity) => [
@@ -480,7 +530,7 @@ function EpisodeMetadataDetail({ episode, providerName }: { episode: DisplayEpis
         ? "沿用剧集海报"
         : "暂无剧照；更新 NFO 时可使用视频截图兜底";
   return <div className="episode-metadata-detail">
-    <Artwork className="episode-detail-artwork" url={episode.poster_url} alt={`第 ${episode.episode_number} 集刮削图片`} />
+    <Artwork className="episode-detail-artwork" url={withArtworkRevision(episode.poster_url, artworkRevision)} alt={`第 ${episode.episode_number} 集刮削图片`} />
     <div className="episode-detail-content">
       <span className="scrape-level-label">{remote ? `${providerName} 分集刮削数据` : "本地分集 NFO"}</span>
       <h5>{episode.title}</h5>
@@ -512,6 +562,16 @@ function posterSourceText(source: string, hasSeriesPoster = false) {
   if (source === "local") return "季度海报";
   if (source === "series_fallback" || hasSeriesPoster) return "沿用剧集海报";
   return "暂无季度海报";
+}
+
+function artworkExtractionSummary(result: SeasonArtworkExtractionResult) {
+  if (!result.target_count) return "该季度未发现可提取的正片。";
+  return `已生成 ${result.created_files.length} 张，跳过 ${result.skipped_files.length} 张，失败 ${result.failed_files.length} 张。`;
+}
+
+function withArtworkRevision(url: string | null, revision: number) {
+  if (!url || !revision || !url.startsWith("/api/")) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${revision}`;
 }
 
 function pad(value: number) { return String(value).padStart(2, "0"); }

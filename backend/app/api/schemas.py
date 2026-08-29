@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from app.domain.artwork import SeasonArtworkExtractionResult
 from app.domain.filename import FileRole, NamingPreview, NamingPreviewEntry, ParsedMediaInfo
 from app.domain.mapping_suggestion import EpisodeMappingSuggestion
 from app.domain.media import (
@@ -782,6 +783,40 @@ class NfoGenerationRequest(BaseModel):
 class NfoGenerationSkipView(BaseModel):
     relative_path: str
     reason: str
+
+
+class SeasonArtworkExtractionResultView(BaseModel):
+    media_id: str
+    season_number: int
+    target_count: int
+    created_files: list[str]
+    skipped_files: list[NfoGenerationSkipView]
+    failed_files: list[NfoGenerationSkipView]
+
+    @classmethod
+    def from_domain(
+        cls, result: SeasonArtworkExtractionResult
+    ) -> SeasonArtworkExtractionResultView:
+        return cls(
+            media_id=result.media_id,
+            season_number=result.season_number,
+            target_count=result.target_count,
+            created_files=list(result.created_files),
+            skipped_files=[
+                NfoGenerationSkipView(
+                    relative_path=issue.relative_path,
+                    reason=issue.reason,
+                )
+                for issue in result.skipped_files
+            ],
+            failed_files=[
+                NfoGenerationSkipView(
+                    relative_path=issue.relative_path,
+                    reason=issue.reason,
+                )
+                for issue in result.failed_files
+            ],
+        )
 
 
 class NfoGenerationResultView(BaseModel):

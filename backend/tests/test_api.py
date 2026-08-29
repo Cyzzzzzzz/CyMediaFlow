@@ -82,6 +82,97 @@ def test_media_list_supports_added_time_name_sorting_and_search(tmp_path: Path) 
     assert invalid.status_code == 422
 
 
+def test_manual_season_artwork_extraction_refreshes_only_the_target_season(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Example Show"
+    first_season = series / "Season 1"
+    second_season = series / "Season 2"
+    first_season.mkdir(parents=True)
+    second_season.mkdir()
+    first_video = first_season / "Example Show S01E01.mkv"
+    existing_video = first_season / "Example Show S01E02.mkv"
+    referenced_video = first_season / "Example Show S01E03.mkv"
+    other_season_video = second_season / "Example Show S02E01.mkv"
+    for video in (first_video, existing_video, referenced_video, other_season_video):
+        video.write_bytes(f"untouched:{video.name}".encode())
+    existing_video.with_name(f"{existing_video.stem}-thumb.png").write_bytes(b"existing")
+    referenced_artwork = first_season / "custom-episode-three.jpg"
+    referenced_artwork.write_bytes(b"referenced")
+    referenced_video.with_suffix(".nfo").write_text(
+        "<episodedetails><thumb>custom-episode-three.jpg</thumb></episodedetails>",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    async def generate_artwork(
+        _video_path: Path,
+        output_path: Path,
+        _duration_seconds: float | None,
+        overwrite_existing: bool = False,
+    ) -> ArtworkGenerationResult:
+        assert overwrite_existing is True
+        output_path.write_bytes(b"manual-screenshot")
+        return ArtworkGenerationResult(True)
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.media_probe.probe = AsyncMock(
+            return_value=MediaProbeResult(
+                MediaFileInfo(
+                    format_name="matroska,webm",
+                    duration_seconds=1200,
+                    bit_rate=None,
+                    size=None,
+                    streams=(),
+                )
+            )
+        )
+        client.app.state.container.episode_artwork_generator.generate = AsyncMock(
+            side_effect=generate_artwork
+        )
+
+        response = client.post(
+            f"/api/v1/media/{media_id}/artwork/seasons/1/extract"
+        )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["season_number"] == 1
+    assert result["target_count"] == 3
+    assert result["created_files"] == [
+        "Season 1/Example Show S01E01-thumb.jpg",
+        "Season 1/Example Show S01E02-thumb.png",
+        "Season 1/Example Show S01E03-thumb.jpg",
+    ]
+    assert result["skipped_files"] == []
+    assert existing_video.with_name(
+        f"{existing_video.stem}-thumb.png"
+    ).read_bytes() == b"manual-screenshot"
+    assert referenced_video.with_name(
+        f"{referenced_video.stem}-thumb.jpg"
+    ).read_bytes() == b"manual-screenshot"
+    assert referenced_artwork.read_bytes() == b"referenced"
+    assert result["failed_files"] == []
+    assert first_video.with_name(f"{first_video.stem}-thumb.jpg").read_bytes() == (
+        b"manual-screenshot"
+    )
+    assert not other_season_video.with_name(
+        f"{other_season_video.stem}-thumb.jpg"
+    ).exists()
+    assert first_video.read_bytes() == f"untouched:{first_video.name}".encode()
+    assert client.app.state.container.media_probe.probe.await_count == 3
+    assert client.app.state.container.episode_artwork_generator.generate.await_count == 3
+
+
 def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None:
     media_root = tmp_path / "media"
     series = media_root / "Example Show"

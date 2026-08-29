@@ -43,6 +43,28 @@ async def test_ffmpeg_generates_exclusive_episode_thumbnail(
 
 
 @pytest.mark.asyncio
+async def test_ffmpeg_atomically_overwrites_existing_thumbnail_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    video = tmp_path / "Example S01E01.mkv"
+    output = tmp_path / "Example S01E01-thumb.jpg"
+    video.write_bytes(b"video")
+    output.write_bytes(b"old-thumbnail")
+
+    async def create_process(*arguments: object, **_: object) -> _SuccessfulProcess:
+        return _SuccessfulProcess(Path(str(arguments[-1])))
+
+    monkeypatch.setattr(ffmpeg_artwork.asyncio, "create_subprocess_exec", create_process)
+
+    result = await FfmpegEpisodeArtworkGenerator().generate(
+        video, output, overwrite_existing=True
+    )
+
+    assert result.created is True
+    assert output.read_bytes() == b"\xff\xd8generated-jpeg\xff\xd9"
+
+
+@pytest.mark.asyncio
 async def test_missing_ffmpeg_returns_structured_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

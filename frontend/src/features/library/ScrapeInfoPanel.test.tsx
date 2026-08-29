@@ -43,6 +43,35 @@ describe("ScrapeInfoPanel", () => {
     expect(onScrapeMetadata).toHaveBeenCalledOnce();
   });
 
+  it("manually extracts missing episode artwork for one selected local season", () => {
+    const onExtractSeasonArtwork = vi.fn();
+    render(<ScrapeInfoPanel
+      localInfo={localInfo}
+      localSeasonNumbers={[1, 2]}
+      providerInfo={undefined}
+      loading={false}
+      error={false}
+      onExtractSeasonArtwork={onExtractSeasonArtwork}
+      artworkExtractionResult={{
+        media_id: "anime-1",
+        season_number: 1,
+        target_count: 3,
+        created_files: ["Season 1/E01-thumb.jpg", "Season 1/E02-thumb.jpg"],
+        skipped_files: [],
+        failed_files: [{ relative_path: "Season 1/E03.mkv", reason: "FFMPEG_CAPTURE_FAILED" }],
+      }}
+    />);
+
+    expect(screen.getByRole("button", { name: "提取第 1 季剧集封面" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "提取第 2 季剧集封面" })).toBeTruthy();
+    const firstSeasonButton = screen.getByRole("button", { name: "提取第 1 季剧集封面" });
+    expect(firstSeasonButton.getAttribute("title")).toContain("覆盖已有分集侧边图");
+    expect(screen.getByText("已生成 2 张，跳过 0 张，失败 1 张。")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "提取第 2 季剧集封面" }));
+    expect(onExtractSeasonArtwork).toHaveBeenCalledOnce();
+    expect(onExtractSeasonArtwork).toHaveBeenCalledWith(2);
+  });
+
   it("always shows the complete Bangumi entry while details are not loaded", () => {
     render(<ScrapeInfoPanel
       provider="bangumi"

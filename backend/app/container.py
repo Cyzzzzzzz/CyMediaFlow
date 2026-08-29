@@ -14,6 +14,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.core.config import Settings
 from app.core.path_safety import path_is_within
 from app.domain.filename_parser import FilenameParser
@@ -43,6 +44,7 @@ class Container:
     episode_mapping_suggestion_service: EpisodeMappingSuggestionService
     media_probe: FfprobeMediaProbe
     episode_artwork_generator: FfmpegEpisodeArtworkGenerator
+    season_artwork_service: SeasonArtworkExtractionService
     bangumi: BangumiMetadataProvider
     tmdb: TmdbMetadataProvider
     image_proxy: BangumiImageProxy
@@ -114,6 +116,13 @@ def build_container(settings: Settings) -> Container:
         timeout_seconds=settings.ffmpeg_timeout_seconds,
         capture_percent=settings.episode_artwork_capture_percent,
     )
+    season_artwork_service = SeasonArtworkExtractionService(
+        catalog,
+        repository,
+        nfo_service,
+        media_probe,
+        episode_artwork_generator,
+    )
     remote_artwork = HttpRemoteArtworkDownloader(
         user_agent=settings.bangumi_user_agent,
         timeout_seconds=settings.request_timeout_seconds,
@@ -148,6 +157,7 @@ def build_container(settings: Settings) -> Container:
         episode_mapping_suggestion_service=episode_mapping_suggestion_service,
         media_probe=media_probe,
         episode_artwork_generator=episode_artwork_generator,
+        season_artwork_service=season_artwork_service,
         bangumi=bangumi,
         tmdb=tmdb,
         image_proxy=image_proxy,

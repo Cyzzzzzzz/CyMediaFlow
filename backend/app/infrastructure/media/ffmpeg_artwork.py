@@ -27,8 +27,9 @@ class FfmpegEpisodeArtworkGenerator:
         video_path: Path,
         output_path: Path,
         duration_seconds: float | None = None,
+        overwrite_existing: bool = False,
     ) -> ArtworkGenerationResult:
-        if output_path.is_file():
+        if output_path.is_file() and not overwrite_existing:
             return ArtworkGenerationResult(False)
         if not video_path.is_file():
             return ArtworkGenerationResult(False, "FFMPEG_MEDIA_NOT_FOUND")
@@ -76,6 +77,15 @@ class FfmpegEpisodeArtworkGenerator:
             with suppress(OSError):
                 temporary.unlink()
             return ArtworkGenerationResult(False, "FFMPEG_CAPTURE_FAILED")
+
+        if overwrite_existing:
+            try:
+                os.replace(temporary, output_path)
+            except OSError:
+                with suppress(OSError):
+                    temporary.unlink()
+                return ArtworkGenerationResult(False, "ARTWORK_WRITE_FAILED")
+            return ArtworkGenerationResult(True)
 
         try:
             with output_path.open("xb") as destination, temporary.open("rb") as source:

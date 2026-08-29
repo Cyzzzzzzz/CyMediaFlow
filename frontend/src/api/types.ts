@@ -126,6 +126,11 @@ export type NfoGenerationResult = {
   skipped_files: { relative_path: string; reason: string }[]; generated_episode_count: number;
   probe_warnings: { relative_path: string; reason: string }[];
 };
+export type SeasonArtworkExtractionResult = {
+  media_id: string; season_number: number; target_count: number; created_files: string[];
+  skipped_files: { relative_path: string; reason: string }[];
+  failed_files: { relative_path: string; reason: string }[];
+};
 export type SeriesScrapeInfo = {
   title: string; original_title: string | null; plot: string | null; year: number | null;
   premiered: string | null; end_date: string | null; status: string | null; rating: number | null;

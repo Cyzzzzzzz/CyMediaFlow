@@ -31,6 +31,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [candidateLimit, setCandidateLimit] = useState(10);
   const [directId, setDirectId] = useState("");
+  const [artworkRevision, setArtworkRevision] = useState(0);
   const [form, setForm] = useState<MediaBinding>(item.binding ?? defaults);
   const [detailId, setDetailId] = useState<string | null>(initialPrimary?.external_id ?? (initialProvider === "tmdb" ? nfoTmdbId : nfoBangumiId));
   const effectiveExternalId = detailId ?? (provider === "tmdb" ? (form.tmdb_id || nfoTmdbId) : (form.bangumi_id || nfoBangumiId));
@@ -182,6 +183,15 @@ export function ScrapeDrawer({ item, onClose }: Props) {
             [`${activeProvider}_summary`]: detail.summary,
           },
         }) : current);
+    },
+  });
+  const extractSeasonArtwork = useMutation({
+    mutationFn: (seasonNumber: number) => libraryApi.extractSeasonArtwork(
+      item.id, seasonNumber,
+    ),
+    onSuccess: () => {
+      setArtworkRevision(Date.now());
+      void client.invalidateQueries({ queryKey: scrapeInfoKey });
     },
   });
   const addById = useMutation({
@@ -435,6 +445,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
         <Accordion icon={<FilmSlate size={21} />} title="刮削信息" summary={scrapeSummary(scrapeInfo.data)} open={openSection === "scrape"} onToggle={() => setOpenSection("scrape")}>
           <ScrapeInfoPanel
             mediaId={item.id}
+            localSeasonNumbers={item.seasons}
             provider={provider}
             generationProvider={nfoProvider}
             localInfo={scrapeInfo.data}
@@ -464,6 +475,11 @@ export function ScrapeDrawer({ item, onClose }: Props) {
               ...current,
               metadata: { ...current.metadata, nfo_locked_fields: lockedFields, nfo_manual_values: manualValues },
             }))}
+            onExtractSeasonArtwork={(season) => extractSeasonArtwork.mutate(season)}
+            extractingArtworkSeason={extractSeasonArtwork.isPending ? extractSeasonArtwork.variables : null}
+            artworkExtractionResult={extractSeasonArtwork.data}
+            artworkExtractionErrorSeason={extractSeasonArtwork.isError ? extractSeasonArtwork.variables : null}
+            artworkRevision={artworkRevision}
           />
         </Accordion>
         <Accordion icon={<Cube size={21} />} title="Emby 刮削" summary={form.emby_enabled ? "已启用" : "已停用"} open={openSection === "emby"} onToggle={() => setOpenSection("emby")}>

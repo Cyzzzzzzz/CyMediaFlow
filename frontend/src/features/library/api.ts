@@ -1,5 +1,5 @@
 import { apiRequest } from "../../api/client";
-import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding } from "../../api/types";
+import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding, SeasonArtworkExtractionResult } from "../../api/types";
 
 export type LibrarySort = "added_desc" | "name_asc";
 
@@ -17,6 +17,7 @@ export const libraryApi = {
     body: JSON.stringify({ provider_subjects: providerSubjects, default_season: defaultSeason }),
   }),
   scrapeInfo: (id: string, refresh = false) => apiRequest<LocalScrapeInfo>(`/api/v1/media/${id}/scrape-info?refresh=${refresh}`),
+  extractSeasonArtwork: (id: string, seasonNumber: number) => apiRequest<SeasonArtworkExtractionResult>(`/api/v1/media/${id}/artwork/seasons/${seasonNumber}/extract`, { method: "POST" }),
   binding: async (id: string) => (await apiRequest<MediaItem>(`/api/v1/media/${id}`)).binding,
   saveBinding: (id: string, binding: MediaBinding) => apiRequest<MediaBinding>(`/api/v1/media/${id}/scrape-config`, { method: "PUT", body: JSON.stringify(binding) }),
   namingPreview: (id: string, binding: MediaBinding) => apiRequest<NamingPreview>(`/api/v1/media/${id}/naming-preview`, {
