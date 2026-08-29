@@ -13,6 +13,14 @@ EXTRA_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("dialogue", re.compile(r"对话|對話|dialogue", re.I)),
     ("phone", re.compile(r"电话|電話|phone", re.I)),
     ("bonus", re.compile(r"特典映像|特典|bonus|extras?", re.I)),
+    (
+        "special",
+        re.compile(
+            r"S\d{1,2}E(?:OVA|OAD|SP)|"
+            r"(?:^|[/\\\[\] ._-])(?:OVA|OAD|SPECIALS?)\d*(?:$|[/\\\[\] ._-])",
+            re.I,
+        ),
+    ),
 )
 EXTRA_FOLDER_NAMES = {
     "fonts": "fonts",
@@ -25,6 +33,9 @@ EXTRA_FOLDER_NAMES = {
     "nced": "credit",
     "pv": "pv",
     "sp": "special",
+    "sps": "special",
+    "special": "special",
+    "specials": "special",
     "对话": "dialogue",
     "對話": "dialogue",
     "电话": "phone",
@@ -35,9 +46,10 @@ EXTRA_FOLDER_NAMES = {
 
 
 def classify_media(relative_path: Path, parsed: ParsedMediaInfo) -> str:
-    parent_name = relative_path.parent.name.strip(" []").casefold()
-    if parent_name in EXTRA_FOLDER_NAMES:
-        return EXTRA_FOLDER_NAMES[parent_name]
+    for parent_part in reversed(relative_path.parent.parts):
+        parent_name = parent_part.strip(" []").casefold()
+        if parent_name in EXTRA_FOLDER_NAMES:
+            return EXTRA_FOLDER_NAMES[parent_name]
     for category, pattern in EXTRA_PATTERNS:
         if pattern.search(relative_path.name):
             return category

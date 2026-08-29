@@ -32,18 +32,38 @@ export type MetadataCandidate = {
   tags?: ProviderTag[]; persons?: ProviderPerson[]; characters?: ProviderCharacter[];
   related_subjects?: ProviderRelatedSubject[];
 };
+export type CachedMetadataSearch = {
+  query: string; limit: number; candidates: MetadataCandidate[];
+};
 export type ProviderEpisode = {
   provider: "bangumi" | "tmdb"; external_id: string; episode_number: number;
   title: string; original_title: string | null; air_date: string | null;
   summary: string | null; runtime_minutes: number | null; image_url: string | null;
 };
+export type ProviderSubjectRole = "primary" | "season" | "season_part" | "movie" | "special" | "related" | "metadata_only";
+export type ProviderSubjectBinding = {
+  provider: "bangumi" | "tmdb"; external_id: string; title: string;
+  original_title: string | null; image_url: string | null; role: ProviderSubjectRole;
+};
+export type EpisodeSourceRule = {
+  provider: "bangumi" | "tmdb"; external_id: string; local_season: number;
+  local_episode_start: number; local_episode_end: number | null; provider_episode_start: number;
+  provider_season: number; number_mode: "episode" | "sort";
+};
+export type DetectedEpisodeRange = {
+  season_number: number; episode_start: number; episode_end: number; episode_count: number;
+};
+export type EpisodeMappingSuggestion = {
+  rules: EpisodeSourceRule[]; detected_ranges: DetectedEpisodeRange[]; warnings: string[];
+};
 export type MediaBinding = {
   bangumi_id: string | null; tmdb_id: string | null; preferred_title: string | null; content_kind: string;
   year: number | null; season_number: number; episode_offset: number; folder_template: string; filename_template: string;
   emby_enabled: boolean; image_url: string | null; metadata: Record<string, unknown>;
+  provider_subjects: ProviderSubjectBinding[]; episode_source_rules: EpisodeSourceRule[];
 };
 export type SettingsView = {
-  media_root: string; allowed_media_root: string; media_root_exists: boolean; media_root_readable: boolean;
+  media_root: string; allowed_media_root: string; allowed_media_roots: string[]; media_root_exists: boolean; media_root_readable: boolean;
   bangumi_configured: boolean; bangumi_api_url: string; tmdb_configured: boolean; tmdb_api_url: string;
   operation_mode: "nfo_create_only" | "nfo_managed_update";
   bangumi_proxy_enabled: boolean; bangumi_proxy_url: string | null;

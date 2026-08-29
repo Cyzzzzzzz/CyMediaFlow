@@ -5,11 +5,26 @@ import { imageSource } from "../../api/images";
 import type { EpisodeScrapeInfo, LocalScrapeInfo, MetadataCandidate, NfoGenerationResult, ProviderEpisode, SeasonScrapeInfo } from "../../api/types";
 import { NfoFieldPolicyEditor } from "./NfoFieldPolicyEditor";
 
+export type BangumiSeasonMetadataGroup = {
+  seasonNumber: number;
+  subjects: {
+    externalId: string;
+    title: string;
+    imageUrl: string | null;
+    ranges: string[];
+    metadata: MetadataCandidate | undefined;
+    loading: boolean;
+    error: boolean;
+  }[];
+};
+
 type Props = {
   mediaId?: string;
   provider?: "bangumi" | "tmdb";
+  generationProvider?: "bangumi" | "tmdb";
   localInfo: LocalScrapeInfo | undefined;
   providerInfo: MetadataCandidate | undefined;
+  bangumiSeasonGroups?: BangumiSeasonMetadataGroup[];
   providerEpisodes?: ProviderEpisode[];
   providerEpisodesLoading?: boolean;
   providerEpisodesError?: boolean;
@@ -20,7 +35,9 @@ type Props = {
   onGenerate?: () => void;
   generating?: boolean;
   generationError?: boolean;
+  generationErrorMessage?: string;
   generationResult?: NfoGenerationResult;
+  canGenerateNfo?: boolean;
   canScrapeMetadata?: boolean;
   onScrapeMetadata?: () => void;
   scrapingMetadata?: boolean;
@@ -31,7 +48,7 @@ type Props = {
   onFieldPolicyChange?: (lockedFields: string[], manualValues: Record<string, unknown>) => void;
 };
 
-export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationResult, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange }: Props) {
+export function ScrapeInfoPanel({ mediaId, provider, generationProvider, localInfo, providerInfo, bangumiSeasonGroups = [], providerEpisodes = [], providerEpisodesLoading = false, providerEpisodesError = false, seasonNumber = 1, episodeOffset = 0, loading, error, onGenerate, generating = false, generationError = false, generationErrorMessage, generationResult, canGenerateNfo, canScrapeMetadata = false, onScrapeMetadata, scrapingMetadata = false, scrapeMetadataSuccess = false, scrapeMetadataError = false, lockedFields = [], manualValues = {}, onFieldPolicyChange }: Props) {
   const [generationArmed, setGenerationArmed] = useState(false);
   const [expandedEpisode, setExpandedEpisode] = useState<string | null>(null);
   const localSeries = localInfo?.series;
@@ -41,9 +58,11 @@ export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, pr
   const posterUrl = localSeries?.poster_url ?? providerInfo?.image_url ?? null;
   const episodeTotal = localInfo?.seasons.reduce((total, season) => total + season.episodes.length, 0) ?? 0;
   const hasExistingNfo = !!localSeries || episodeTotal > 0;
-  const canGenerateNfo = canScrapeMetadata || !!providerInfo;
+  const generationAvailable = canGenerateNfo ?? (canScrapeMetadata || !!providerInfo);
   const activeProvider = provider ?? providerInfo?.provider ?? generationResult?.provider ?? "bangumi";
-  const providerName = activeProvider === "tmdb" ? "TMDB" : "Bangumi";
+  const metadataProviderName = activeProvider === "tmdb" ? "TMDB" : "Bangumi";
+  const nfoProvider = generationProvider ?? generationResult?.provider ?? activeProvider;
+  const nfoProviderName = nfoProvider === "tmdb" ? "TMDB" : "Bangumi";
   const displaySeasons = mergeEpisodeMetadata(
     localInfo?.seasons ?? [], providerEpisodes, seasonNumber, episodeOffset, activeProvider,
   );
@@ -58,10 +77,10 @@ export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, pr
 
   return <div className="scrape-info-panel">
     <section className="metadata-scrape-action">
-      <div><strong>{providerName} 元数据</strong><small>{canScrapeMetadata ? "即使已有本地 NFO，也可以重新拉取最新数据。" : `请先在作品匹配中绑定 ${providerName} 条目。`}</small></div>
+      <div><strong>{metadataProviderName} 元数据</strong><small>{canScrapeMetadata ? "打开时优先显示上次缓存；点击按钮才重新读取远程数据与本地 NFO。" : `请先在作品匹配中绑定 ${metadataProviderName} 条目。`}</small></div>
       <button className="preview-refresh" type="button" onClick={onScrapeMetadata} disabled={!canScrapeMetadata || !onScrapeMetadata || scrapingMetadata}><ArrowsClockwise size={15} className={scrapingMetadata ? "spin" : ""} />{scrapingMetadata ? "刮削中…" : "刮削元数据"}</button>
-      {scrapeMetadataSuccess ? <span className="metadata-scrape-status success">已重新获取 {providerName} 元数据</span> : null}
-      {scrapeMetadataError ? <span className="metadata-scrape-status error">刮削失败，请检查 {providerName} 连接</span> : null}
+      {scrapeMetadataSuccess ? <span className="metadata-scrape-status success">已读取最新 {metadataProviderName} 元数据，尚未写入 NFO</span> : null}
+      {scrapeMetadataError ? <span className="metadata-scrape-status error">远程读取失败，请检查 {metadataProviderName} 连接</span> : null}
     </section>
     <section className="scrape-series-card">
       <Artwork className="series-artwork" url={posterUrl} alt={`${title} 剧集海报`} />
@@ -90,15 +109,15 @@ export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, pr
       <InfoLine label="外部 ID" values={localSeries.external_ids.map((identity) => `${identity.provider} #${identity.external_id}`)} />
     </div> : null}
 
-    {activeProvider === "bangumi" ? <BangumiMetadataDetails mediaId={mediaId ?? localInfo?.media_id} metadata={providerInfo} loading={loading} /> : null}
+    {bangumiSeasonGroups.length || activeProvider === "bangumi" ? <BangumiMetadataDetails mediaId={mediaId ?? localInfo?.media_id} groups={bangumiSeasonGroups} fallbackMetadata={activeProvider === "bangumi" ? providerInfo : undefined} fallbackSeason={seasonNumber} loading={loading} /> : null}
 
-    <NfoFieldPolicyEditor localInfo={localInfo} provider={providerInfo} providerName={providerName} lockedFields={lockedFields} manualValues={manualValues} onChange={onFieldPolicyChange ?? (() => undefined)} />
+    <NfoFieldPolicyEditor localInfo={localInfo} provider={providerInfo} providerName={metadataProviderName} lockedFields={lockedFields} manualValues={manualValues} onChange={onFieldPolicyChange ?? (() => undefined)} />
 
     {generationResult ? <GenerationDiagnostics result={generationResult} /> : null}
     <section className="nfo-generation-card">
-      <div><span className="scrape-level-label">{providerName} 自动补全</span><strong>{hasExistingNfo ? "更新现有 NFO" : "生成本地 NFO"}</strong><small>{hasExistingNfo ? "更新未锁字段；缺少远程分集图时使用本地视频截图。" : "创建同名分集 NFO；缺少远程分集图时使用本地视频截图。"}</small></div>
-      {!canGenerateNfo ? <p>请先在“作品匹配”中绑定 {providerName} 条目。</p> : generationArmed ? <div className="nfo-generation-confirm"><span>{hasExistingNfo ? "确认覆盖未锁定的 NFO 字段？" : "确认写入 NFO？"}</span><button type="button" onClick={() => setGenerationArmed(false)} disabled={generating}>取消</button><button type="button" className="primary-button" onClick={onGenerate} disabled={generating}>{generating ? "处理中…" : hasExistingNfo ? "确认更新" : "确认生成"}</button></div> : <button className="preview-refresh" type="button" onClick={() => setGenerationArmed(true)} disabled={!onGenerate}><FilePlus size={15} />{hasExistingNfo ? "更新 NFO" : "生成 NFO"}</button>}
-      {generationError ? <p className="nfo-generation-error">生成失败，请检查 {providerName} 连接与媒体目录写入权限。</p> : null}
+      <div><span className="scrape-level-label">{nfoProviderName} 主作品自动补全</span><strong>{hasExistingNfo ? "更新现有 NFO" : "生成本地 NFO"}</strong><small>{hasExistingNfo ? "更新未锁字段；分集按季度映射来源读取，仅在没有任何可用预览图时使用视频截图。" : "创建同名分集 NFO；分集按季度映射来源读取，仅在没有任何可用预览图时使用视频截图。"}</small></div>
+      {!generationAvailable ? <p>请先在“作品匹配”中绑定 {nfoProviderName} 主作品。</p> : generationArmed ? <div className="nfo-generation-confirm"><span>{hasExistingNfo ? "确认覆盖未锁定的 NFO 字段？" : "确认写入 NFO？"}</span><button type="button" onClick={() => setGenerationArmed(false)} disabled={generating}>取消</button><button type="button" className="primary-button" onClick={onGenerate} disabled={generating}>{generating ? "处理中…" : hasExistingNfo ? "确认更新" : "确认生成"}</button></div> : <button className="preview-refresh" type="button" onClick={() => setGenerationArmed(true)} disabled={!onGenerate}><FilePlus size={15} />{hasExistingNfo ? "更新 NFO" : "生成 NFO"}</button>}
+      {generationError ? <p className="nfo-generation-error">NFO 更新失败：{generationErrorMessage ?? "请查看后端日志中的具体错误。"}</p> : null}
     </section>
 
     {displaySeasons.length ? <div className="scrape-season-list">
@@ -107,7 +126,7 @@ export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, pr
         return <section className="scrape-season-card" key={season.season_number}>
         <div className="season-summary">
           <Artwork className="season-artwork" url={season.poster_url ?? posterUrl} alt={`第 ${season.season_number} 季海报`} />
-          <div><span className="scrape-level-label">季度</span><h4>第 {season.season_number} 季</h4><p>{season.episodes.length} 集{season.year ? ` · ${season.year}` : ""}</p><small>{season.remoteOnly ? `${providerName} 分集数据` : posterSourceText(season.poster_source, !!posterUrl)}</small></div>
+          <div><span className="scrape-level-label">季度</span><h4>第 {season.season_number} 季</h4><p>{season.episodes.length} 集{season.year ? ` · ${season.year}` : ""}</p><small>{season.remoteOnly ? `${metadataProviderName} 分集数据` : posterSourceText(season.poster_source, !!posterUrl)}</small></div>
         </div>
         {season.plot ? <p className="season-plot">{season.plot}</p> : null}
         {season.episodes.length ? <div className="episode-strip" aria-label={`第 ${season.season_number} 季剧集`}>
@@ -116,38 +135,97 @@ export function ScrapeInfoPanel({ mediaId, provider, localInfo, providerInfo, pr
             <div><span>S{pad(episode.season_number)}E{pad(episode.episode_number)}</span><strong>{episode.title}</strong><small>{episode.aired || (episode.runtime ? `${episode.runtime} 分钟` : "本地 NFO")}</small></div>
           </button>)}
         </div> : <p className="subtle">该季度尚未发现分集 NFO。</p>}
-        {selected ? <EpisodeMetadataDetail episode={selected} providerName={providerName} /> : null}
+        {selected ? <EpisodeMetadataDetail episode={selected} providerName={metadataProviderName} /> : null}
       </section>})}
-      {providerEpisodesLoading ? <p className="subtle">正在读取 {providerName} 分集数据与剧照…</p> : null}
-      {providerEpisodesError ? <p className="notice">{providerName} 分集数据读取失败；仍显示可用的本地 NFO 和图片。</p> : null}
+      {providerEpisodesLoading ? <p className="subtle">正在读取 {metadataProviderName} 分集数据与剧照…</p> : null}
+      {providerEpisodesError ? <p className="notice">{metadataProviderName} 分集数据读取失败；仍显示可用的本地 NFO 和图片。</p> : null}
     </div> : null}
   </div>;
 }
 
-function BangumiMetadataDetails({ mediaId, metadata, loading }: { mediaId: string | undefined; metadata: MetadataCandidate | undefined; loading: boolean }) {
-  const infobox = metadata?.infobox ?? [];
-  const persons = metadata?.persons ?? [];
-  const characters = metadata?.characters ?? [];
-  const related = metadata?.related_subjects ?? [];
-  const tags = metadata?.tags ?? [];
-  const hasCompleteData = !!(infobox.length || persons.length || characters.length || related.length);
+function BangumiMetadataDetails({ mediaId, groups, fallbackMetadata, fallbackSeason, loading }: { mediaId: string | undefined; groups: BangumiSeasonMetadataGroup[]; fallbackMetadata: MetadataCandidate | undefined; fallbackSeason: number; loading: boolean }) {
+  const displayGroups = groups.length ? groups : fallbackMetadata ? [{
+    seasonNumber: fallbackSeason,
+    subjects: [{
+      externalId: fallbackMetadata.external_id,
+      title: fallbackMetadata.title,
+      imageUrl: fallbackMetadata.image_url,
+      ranges: [],
+      metadata: fallbackMetadata,
+      loading,
+      error: false,
+    }],
+  }] : [];
+  const subjects = displayGroups.flatMap((group) => group.subjects);
+  const loadedSubjects = subjects.filter((subject) => hasCompleteBangumiData(subject.metadata));
+  const isLoading = loading || subjects.some((subject) => subject.loading);
 
   return <details className="bangumi-metadata-fold">
     <summary>
       <span>Bangumi 完整条目信息</span>
-      <small>{hasCompleteData ? `${infobox.length} 项资料 · ${persons.length} 条制作记录 · ${characters.length} 个角色 · ${related.length} 个关联条目` : loading ? "正在读取完整信息…" : "尚未加载完整信息"}</small>
+      <small>{displayGroups.length ? `${displayGroups.length} 个本地季度 · ${subjects.length} 个映射条目${loadedSubjects.length < subjects.length ? ` · 已加载 ${loadedSubjects.length}` : ""}` : isLoading ? "正在读取完整信息…" : "尚未配置 Bangumi 季度条目"}</small>
     </summary>
     <div className="bangumi-metadata-body">
-      {!hasCompleteData ? <p className="bangumi-metadata-empty">{loading ? "正在从 Bangumi 读取条目、制作人员、角色和关联条目。" : "点击上方“刮削元数据”重新获取完整 Bangumi 信息。"}</p> : null}
+      {!displayGroups.length ? <p className="bangumi-metadata-empty">{isLoading ? "正在从 Bangumi 读取季度条目。" : "请先将 Bangumi 条目设为主作品，或在季集映射中添加 Bangumi 分段来源。"}</p> : null}
+      {displayGroups.map((group) => <section className="bangumi-season-metadata" key={group.seasonNumber}>
+        <header><div><span className="scrape-level-label">本地季度</span><h4>第 {group.seasonNumber} 季</h4></div><small>{group.subjects.length} 个 Bangumi 条目</small></header>
+        <div className="bangumi-season-subjects">
+          {group.subjects.map((subject) => <details className="bangumi-subject-metadata" key={subject.externalId}>
+            <summary>
+              <Artwork className="bangumi-subject-artwork" url={subject.metadata?.image_url ?? subject.imageUrl} alt={`${subject.title} 海报`} />
+              <span><strong>{subject.metadata?.title ?? subject.title}</strong><small>Bangumi #{subject.externalId}{subject.ranges.length ? ` · 本地 ${subject.ranges.join("、")}` : ""}</small></span>
+            </summary>
+            {subject.loading && !subject.metadata ? <p className="bangumi-metadata-empty">正在读取该季度条目的完整信息…</p> : null}
+            {subject.error && !subject.metadata ? <p className="bangumi-metadata-empty error">Bangumi #{subject.externalId} 读取失败，请检查连接后重试。</p> : null}
+            {subject.metadata ? <BangumiSubjectMetadata mediaId={mediaId} metadata={subject.metadata} /> : null}
+          </details>)}
+        </div>
+      </section>)}
+    </div>
+  </details>;
+}
+
+function hasCompleteBangumiData(metadata: MetadataCandidate | undefined) {
+  return !!metadata && !!(
+    metadata.infobox?.length
+    || metadata.persons?.length
+    || metadata.characters?.length
+    || metadata.related_subjects?.length
+    || metadata.tags?.length
+    || metadata.rating
+  );
+}
+
+function BangumiSubjectMetadata({ mediaId, metadata }: { mediaId: string | undefined; metadata: MetadataCandidate }) {
+  const infobox = metadata.infobox ?? [];
+  const persons = metadata.persons ?? [];
+  const characters = metadata.characters ?? [];
+  const related = metadata.related_subjects ?? [];
+  const tags = metadata.tags ?? [];
+  const hasCompleteData = hasCompleteBangumiData(metadata);
+
+  return <div className="bangumi-subject-body">
+      <div className="bangumi-subject-overview">
+        {metadata.original_title && metadata.original_title !== metadata.title ? <p className="scrape-original">{metadata.original_title}</p> : null}
+        <div className="scrape-facts">
+          {metadata.year ? <span>{metadata.year}</span> : null}
+          {metadata.episode_count !== null ? <span>{metadata.episode_count} 集</span> : null}
+          {metadata.premiere_date ? <span>{metadata.premiere_date}</span> : null}
+          {metadata.platform ? <span>{metadata.platform}</span> : null}
+          <a href={`https://bangumi.tv/subject/${metadata.external_id}`} target="_blank" rel="noreferrer">Bangumi #{metadata.external_id}</a>
+        </div>
+        {metadata.summary ? <p>{metadata.summary}</p> : null}
+      </div>
+      {!hasCompleteData ? <p className="bangumi-metadata-empty">该条目未返回扩展资料，仍可使用标题、简介与分集数据。</p> : null}
       {hasCompleteData ? <>
       <details className="bangumi-metadata-section">
         <summary>条目资料 <small>{infobox.length} 项</small></summary>
         <div className="bangumi-infobox-list">
-          {metadata?.rating ? <div><dt>评分</dt><dd>{metadata.rating.score ?? "—"} / 10 · 排名 #{metadata.rating.rank ?? "—"} · {metadata.rating.total} 人评分</dd></div> : null}
-          {metadata?.premiere_date ? <div><dt>首播</dt><dd>{metadata.premiere_date}</dd></div> : null}
-          {metadata?.platform ? <div><dt>平台</dt><dd>{metadata.platform}</dd></div> : null}
+          {metadata.rating ? <div><dt>评分</dt><dd>{metadata.rating.score ?? "—"} / 10 · 排名 #{metadata.rating.rank ?? "—"} · {metadata.rating.total} 人评分</dd></div> : null}
+          {metadata.premiere_date ? <div><dt>首播</dt><dd>{metadata.premiere_date}</dd></div> : null}
+          {metadata.platform ? <div><dt>平台</dt><dd>{metadata.platform}</dd></div> : null}
           {infobox.map((item) => <div key={item.key}><dt>{item.key}</dt><dd>{item.values.map((value) => value.label ? `${value.label}: ${value.value}` : value.value).join("、")}</dd></div>)}
-          {(metadata?.meta_tags?.length || tags.length) ? <div><dt>标签</dt><dd>{[...(metadata?.meta_tags ?? []), ...tags.map((tag) => `${tag.name}${tag.count ? ` (${tag.count})` : ""}`)].join("、")}</dd></div> : null}
+          {(metadata.meta_tags?.length || tags.length) ? <div><dt>标签</dt><dd>{[...(metadata.meta_tags ?? []), ...tags.map((tag) => `${tag.name}${tag.count ? ` (${tag.count})` : ""}`)].join("、")}</dd></div> : null}
         </div>
       </details>
 
@@ -191,8 +269,7 @@ function BangumiMetadataDetails({ mediaId, metadata, loading }: { mediaId: strin
         </div>
       </details>
       </> : null}
-    </div>
-  </details>;
+  </div>;
 }
 
 function MetadataPortrait({ mediaId, category, externalId, remoteUrl, alt }: { mediaId: string | undefined; category: "persons" | "characters" | "voice-actors" | "related"; externalId: string; remoteUrl: string | null; alt: string }) {
@@ -276,8 +353,19 @@ function mergeEpisodeMetadata(
   provider: "bangumi" | "tmdb",
 ): DisplaySeason[] {
   const remoteByNumber = new Map(remoteEpisodes.map((episode) => [episode.episode_number, episode]));
+  const remoteByIdentity = new Map(
+    remoteEpisodes.map((episode) => [providerIdentity(episode.provider, episode.external_id), episode]),
+  );
   const mergeEpisode = (episode: EpisodeScrapeInfo): DisplayEpisode => {
-    const remote = remoteByNumber.get(episode.episode_number + episodeOffset);
+    const providerIds = episode.external_ids.filter(
+      (identity) => identity.provider.toLocaleLowerCase() === provider,
+    );
+    const remote = providerIds
+      .map((identity) => remoteByIdentity.get(providerIdentity(identity.provider, identity.external_id)))
+      .find((candidate) => candidate !== undefined)
+      ?? (providerIds.length === 0 && episode.season_number === configuredSeason
+        ? remoteByNumber.get(episode.episode_number + episodeOffset)
+        : undefined);
     const localArtwork = episode.poster_source === "local";
     return {
       ...episode,
@@ -358,6 +446,10 @@ function remoteDisplayEpisode(
   };
 }
 
+function providerIdentity(provider: string, externalId: string) {
+  return `${provider.toLocaleLowerCase()}:${externalId}`;
+}
+
 function EpisodeMetadataDetail({ episode, providerName }: { episode: DisplayEpisode; providerName: string }) {
   const remote = episode.providerEpisode;
   const identityMap = new Map(
@@ -383,7 +475,7 @@ function EpisodeMetadataDetail({ episode, providerName }: { episode: DisplayEpis
   return <div className="episode-metadata-detail">
     <Artwork className="episode-detail-artwork" url={episode.poster_url} alt={`第 ${episode.episode_number} 集刮削图片`} />
     <div className="episode-detail-content">
-      <span className="scrape-level-label">{providerName} 分集刮削数据</span>
+      <span className="scrape-level-label">{remote ? `${providerName} 分集刮削数据` : "本地分集 NFO"}</span>
       <h5>{episode.title}</h5>
       {episode.original_title && episode.original_title !== episode.title ? <p className="scrape-original">{episode.original_title}</p> : null}
       <div className="scrape-facts">

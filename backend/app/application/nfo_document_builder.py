@@ -10,14 +10,21 @@ from app.domain.media import (
     ProviderEpisode,
     ProviderInfoboxItem,
     ProviderPerson,
+    ProviderSubjectBinding,
 )
 from app.domain.media_probe import MediaFileInfo, MediaStreamInfo
 
 
 class NfoDocumentBuilder:
-    def series(self, subject: MetadataCandidate, episodes: tuple[ProviderEpisode, ...]) -> str:
+    def series(
+        self,
+        subject: MetadataCandidate,
+        episodes: tuple[ProviderEpisode, ...],
+        sources: tuple[ProviderSubjectBinding, ...] = (),
+    ) -> str:
         root = ET.Element("tvshow")
         self._subject_fields(root, subject, episodes, include_emby_people=True)
+        self._work_sources(root, sources)
         self._text(root, "season", -1)
         self._text(root, "episode", -1)
         self._text(root, "displayorder", "aired")
@@ -28,12 +35,14 @@ class NfoDocumentBuilder:
         subject: MetadataCandidate,
         episodes: tuple[ProviderEpisode, ...],
         season_number: int,
+        sources: tuple[ProviderSubjectBinding, ...] = (),
     ) -> str:
         root = ET.Element("season")
         # Emby can aggregate people from both tvshow.nfo and season.nfo. Keep the
         # complete provider payload below, but only expose top-level Emby people
         # on the series document so the same cast and crew are not imported twice.
         self._subject_fields(root, subject, episodes, include_emby_people=False)
+        self._work_sources(root, sources)
         season_image_url = next(
             (episode.season_image_url for episode in episodes if episode.season_image_url),
             None,
@@ -46,6 +55,27 @@ class NfoDocumentBuilder:
             thumb.text = season_image_url
         self._text(root, "seasonnumber", season_number)
         return self._serialize(root)
+
+    def _work_sources(
+        self, root: ET.Element, sources: tuple[ProviderSubjectBinding, ...]
+    ) -> None:
+        if not sources:
+            return
+        container = ET.SubElement(root, "cymediaflow")
+        source_list = ET.SubElement(container, "sources")
+        for source in sources:
+            element = ET.SubElement(
+                source_list,
+                "source",
+                {
+                    "provider": source.provider,
+                    "id": source.external_id,
+                    "role": source.role,
+                },
+            )
+            self._text(element, "title", source.title)
+            self._text(element, "originaltitle", source.original_title)
+            self._text(element, "image", source.image_url)
 
     def episode(
         self,

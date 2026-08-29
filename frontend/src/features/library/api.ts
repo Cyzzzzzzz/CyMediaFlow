@@ -1,5 +1,5 @@
 import { apiRequest } from "../../api/client";
-import type { LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode } from "../../api/types";
+import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding } from "../../api/types";
 
 export type LibrarySort = "added_desc" | "name_asc";
 
@@ -8,10 +8,15 @@ export const libraryApi = {
     const params = new URLSearchParams({ include_suggestions: "true", q: search, sort });
     return apiRequest<MediaItem[]>(`/api/v1/media?${params.toString()}`);
   },
-  candidates: (id: string, query: string, provider: "bangumi" | "tmdb") => apiRequest<MetadataCandidate[]>(`/api/v1/media/${id}/metadata/search`, { method: "POST", body: JSON.stringify({ query, provider }) }),
-  metadataDetail: (id: string, externalId: string, provider: "bangumi" | "tmdb") => apiRequest<MetadataCandidate>(`/api/v1/media/${id}/metadata/detail`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider }) }),
-  metadataEpisodes: (id: string, externalId: string, provider: "bangumi" | "tmdb", seasonNumber: number) => apiRequest<ProviderEpisode[]>(`/api/v1/media/${id}/metadata/episodes`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider, season_number: seasonNumber }) }),
-  scrapeInfo: (id: string) => apiRequest<LocalScrapeInfo>(`/api/v1/media/${id}/scrape-info`),
+  candidates: (id: string, query: string, provider: "bangumi" | "tmdb", limit = 10, refresh = false) => apiRequest<MetadataCandidate[]>(`/api/v1/media/${id}/metadata/search`, { method: "POST", body: JSON.stringify({ query, provider, limit, refresh }) }),
+  cachedCandidates: (id: string, provider: "bangumi" | "tmdb") => apiRequest<CachedMetadataSearch | null>(`/api/v1/media/${id}/metadata/search-cache?provider=${provider}`),
+  metadataDetail: (id: string, externalId: string, provider: "bangumi" | "tmdb", refresh = false) => apiRequest<MetadataCandidate>(`/api/v1/media/${id}/metadata/detail`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider, refresh }) }),
+  metadataEpisodes: (id: string, externalId: string, provider: "bangumi" | "tmdb", seasonNumber: number, refresh = false) => apiRequest<ProviderEpisode[]>(`/api/v1/media/${id}/metadata/episodes`, { method: "POST", body: JSON.stringify({ external_id: externalId, provider, season_number: seasonNumber, refresh }) }),
+  suggestEpisodeMapping: (id: string, providerSubjects: ProviderSubjectBinding[], defaultSeason: number) => apiRequest<EpisodeMappingSuggestion>(`/api/v1/media/${id}/episode-mapping/suggest`, {
+    method: "POST",
+    body: JSON.stringify({ provider_subjects: providerSubjects, default_season: defaultSeason }),
+  }),
+  scrapeInfo: (id: string, refresh = false) => apiRequest<LocalScrapeInfo>(`/api/v1/media/${id}/scrape-info?refresh=${refresh}`),
   binding: async (id: string) => (await apiRequest<MediaItem>(`/api/v1/media/${id}`)).binding,
   saveBinding: (id: string, binding: MediaBinding) => apiRequest<MediaBinding>(`/api/v1/media/${id}/scrape-config`, { method: "PUT", body: JSON.stringify(binding) }),
   namingPreview: (id: string, binding: MediaBinding) => apiRequest<NamingPreview>(`/api/v1/media/${id}/naming-preview`, {
@@ -25,8 +30,9 @@ export const libraryApi = {
       bangumi_episode_count: typeof binding.metadata.bangumi_episode_count === "number" ? binding.metadata.bangumi_episode_count : null,
     }),
   }),
-  nfoPreview: (id: string, binding: MediaBinding) => {
-    const provider = binding.metadata.primary_provider === "tmdb" ? "tmdb" : "bangumi";
+  nfoPreview: (id: string, binding: MediaBinding, refresh = false) => {
+    const primary = primarySource(binding);
+    const provider = primary.provider;
     const episodeCount = binding.metadata[`${provider}_episode_count`];
     return apiRequest<NfoPreview>(`/api/v1/media/${id}/nfo-preview`, {
       method: "POST",
@@ -38,8 +44,11 @@ export const libraryApi = {
         provider_episode_number: metadataInteger(binding, "nfo_provider_episode_number", 1),
         local_episode_offset: metadataInteger(binding, "nfo_local_episode_offset", 0),
         overwrite_existing: true,
-        bangumi_id: provider === "tmdb" ? binding.tmdb_id : binding.bangumi_id,
+        bangumi_id: primary.externalId,
         bangumi_episode_count: typeof episodeCount === "number" ? episodeCount : null,
+        episode_source_rules: binding.episode_source_rules,
+        excluded_folders: stringList(binding.metadata.nfo_excluded_folders),
+        refresh,
       }),
     });
   },
@@ -57,6 +66,7 @@ export const libraryApi = {
       provider_episode_number: metadataInteger(binding, "nfo_provider_episode_number", 1),
       local_episode_offset: metadataInteger(binding, "nfo_local_episode_offset", 0),
       excluded_paths: stringList(binding.metadata.nfo_excluded_paths),
+      excluded_folders: stringList(binding.metadata.nfo_excluded_folders),
       included_paths: stringList(binding.metadata.nfo_included_paths),
       overwrite_existing: true,
       locked_fields: stringList(binding.metadata.nfo_locked_fields),
@@ -73,12 +83,28 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function episodeMappingMode(binding: MediaBinding): "auto" | "manual" | "single" {
+function episodeMappingMode(binding: MediaBinding): "auto" | "manual" | "single" | "segments" {
   const value = binding.metadata.nfo_episode_mapping_mode;
-  return value === "manual" || value === "single" ? value : "auto";
+  return value === "manual" || value === "single" || value === "segments" ? value : "auto";
 }
 
 function metadataInteger(binding: MediaBinding, key: string, fallback: number): number {
   const value = binding.metadata[key];
   return typeof value === "number" && Number.isInteger(value) ? value : fallback;
+}
+
+function primarySource(binding: MediaBinding): { provider: "bangumi" | "tmdb"; externalId: string | null } {
+  const explicit = binding.provider_subjects.find((subject) => subject.role === "primary");
+  if (explicit) return { provider: explicit.provider, externalId: explicit.external_id };
+  if (binding.metadata.primary_provider === "tmdb" && binding.tmdb_id) {
+    return { provider: "tmdb", externalId: binding.tmdb_id };
+  }
+  if (binding.metadata.primary_provider === "bangumi" && binding.bangumi_id) {
+    return { provider: "bangumi", externalId: binding.bangumi_id };
+  }
+  const first = binding.provider_subjects[0];
+  if (first) return { provider: first.provider, externalId: first.external_id };
+  return binding.bangumi_id || !binding.tmdb_id
+    ? { provider: "bangumi", externalId: binding.bangumi_id }
+    : { provider: "tmdb", externalId: binding.tmdb_id };
 }

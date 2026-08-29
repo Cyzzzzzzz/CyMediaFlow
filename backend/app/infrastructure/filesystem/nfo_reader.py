@@ -69,7 +69,9 @@ class FileSystemNfoCatalog:
             return None
         episode_document = self._episode_documents(item).get((season_number, episode_number))
         if episode_document:
-            episode_artwork = self._episode_artwork(episode_document[0])
+            episode_artwork = self._episode_artwork(
+                episode_document[0], episode_document[1], item.root_path
+            )
             if episode_artwork:
                 return episode_artwork
         return self._season_artwork(item, season_number, season_directory)[0]
@@ -147,7 +149,7 @@ class FileSystemNfoCatalog:
         root: ET.Element,
         season_poster_source: str,
     ) -> EpisodeScrapeInfo:
-        local_artwork = self._episode_artwork(nfo_path)
+        local_artwork = self._episode_artwork(nfo_path, root, item.root_path)
         return EpisodeScrapeInfo(
             season_number=self._integer(root, "season") or 0,
             episode_number=self._integer(root, "episode") or 0,
@@ -245,14 +247,41 @@ class FileSystemNfoCatalog:
             return item.poster_path, "series_fallback"
         return None, "missing"
 
-    @staticmethod
-    def _episode_artwork(nfo_path: Path) -> Path | None:
+    @classmethod
+    def _episode_artwork(
+        cls,
+        nfo_path: Path,
+        nfo_root: ET.Element | None = None,
+        media_root: Path | None = None,
+    ) -> Path | None:
         candidates = [
             nfo_path.with_name(f"{nfo_path.stem}{suffix}{extension}")
             for suffix in ("-thumb", ".thumb", "-poster", "")
             for extension in IMAGE_EXTENSIONS
         ]
-        return FileSystemNfoCatalog._first_file(candidates)
+        sidecar = cls._first_file(candidates)
+        if sidecar or nfo_root is None or media_root is None:
+            return sidecar
+
+        resolved_media_root = media_root.resolve(strict=False)
+        for value in cls._texts(nfo_root, "thumb"):
+            if "://" in value:
+                continue
+            reference = Path(value.replace("\\", "/"))
+            referenced_candidates = (
+                (reference,)
+                if reference.is_absolute()
+                else (nfo_path.parent / reference, resolved_media_root / reference)
+            )
+            for candidate in referenced_candidates:
+                resolved = candidate.resolve(strict=False)
+                try:
+                    resolved.relative_to(resolved_media_root)
+                except ValueError:
+                    continue
+                if resolved.suffix.casefold() in IMAGE_EXTENSIONS and resolved.is_file():
+                    return resolved
+        return None
 
     @staticmethod
     def _first_file(paths: list[Path]) -> Path | None:

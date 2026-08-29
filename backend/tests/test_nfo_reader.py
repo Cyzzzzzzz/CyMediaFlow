@@ -40,7 +40,7 @@ def test_nfo_reader_builds_series_season_episode_hierarchy_with_artwork(tmp_path
 <fileinfo><streamdetails><video><codec>hevc</codec></video></streamdetails></fileinfo></episodedetails>""",
         encoding="utf-8",
     )
-    thumb = season / f"{video_stem}-thumb.jpg"
+    thumb = season / "episode.jpg"
     thumb.write_bytes(b"episode-thumb")
     (season / "Normalized S01E01.nfo").write_text(
         "<episodedetails><title>重复条目</title><season>1</season><episode>1</episode></episodedetails>",

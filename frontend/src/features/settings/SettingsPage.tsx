@@ -46,7 +46,7 @@ export function SettingsPage() {
         clear_bangumi_access_token: false,
         clear_tmdb_access_token: false,
       }));
-      void client.invalidateQueries({ queryKey: ["library"] });
+      client.removeQueries({ queryKey: ["library"] });
     },
   });
 
@@ -70,15 +70,21 @@ export function SettingsPage() {
   }, [settings.data]);
 
   const update = <K extends keyof SettingsUpdate>(key: K, value: SettingsUpdate[K]) => {
+    save.reset();
     setForm((current) => ({ ...current, [key]: value }));
   };
+  const allowedMediaRoots = settings.data?.allowed_media_roots?.length
+    ? settings.data.allowed_media_roots
+    : settings.data?.allowed_media_root ? [settings.data.allowed_media_root] : [];
 
   return <div className="settings-page">
     <header className="page-header"><div><span className="eyebrow">CyMediaFlow</span><h1>设置</h1></div></header>
 
-    <SettingsSection icon={<FolderOpen size={22} />} title="媒体目录" description={`允许范围：${settings.data?.allowed_media_root ?? "读取中…"}`}>
-      <label className="proxy-field"><span>媒体目录路径</span><input value={form.media_root} onChange={(event) => update("media_root", event.target.value)} /></label>
-      <p className="settings-inline-hint">保存后重新扫描目录，不会移动或重命名媒体文件。</p>
+    <SettingsSection icon={<FolderOpen size={22} />} title="媒体目录" description={allowedMediaRoots.length ? `已授权 ${allowedMediaRoots.length} 个根目录` : "读取允许范围中…"}>
+      <label className="proxy-field"><span>媒体目录路径</span><input list="allowed-media-roots" value={form.media_root} onChange={(event) => update("media_root", event.target.value)} /></label>
+      <datalist id="allowed-media-roots">{allowedMediaRoots.map((root) => <option value={root} key={root} />)}</datalist>
+      <p className="settings-inline-hint">可填写允许范围内的绝对路径或相对路径。Docker/NAS 必须填写容器路径（通常是 /media 或 /media/子目录），不能填写 /volume… 等宿主机路径；更换宿主机挂载源需修改 .env 的 MEDIA_ROOT 并重建容器。</p>
+      <p className="settings-inline-hint">当前实际扫描：{settings.data?.media_root ?? "读取中…"} · {settings.data?.media_root_readable ? "可读取" : "不可读取"}。保存后立即重建媒体索引，不会移动或重命名文件。</p>
     </SettingsSection>
 
     <SettingsSection icon={<EyeSlash size={22} />} title="Emby 忽略目录" description="为匹配的文件夹创建 .ignore">
@@ -106,11 +112,11 @@ export function SettingsPage() {
       <p className="settings-inline-hint">{settings.data?.ffprobe_available ? "路径可用，可读取媒体流信息。" : "未找到 ffprobe，媒体流信息不会写入 NFO。"}</p>
       <label className="proxy-field"><span>ffmpeg 路径</span><input value={form.ffmpeg_path} onChange={(event) => update("ffmpeg_path", event.target.value)} /></label>
       <p className="settings-inline-hint">{settings.data?.ffmpeg_available ? "路径可用，可从本地视频生成分集截图。" : "未找到 ffmpeg，本地分集截图会生成失败。"}</p>
-      <label className="toggle-row"><span>远程剧照缺失时从视频截图</span><input type="checkbox" checked={form.episode_artwork_fallback_enabled} onChange={(event) => update("episode_artwork_fallback_enabled", event.target.checked)} /></label>
+      <label className="toggle-row"><span>没有任何可用预览图时从视频截图</span><input type="checkbox" checked={form.episode_artwork_fallback_enabled} onChange={(event) => update("episode_artwork_fallback_enabled", event.target.checked)} /></label>
       <label className="proxy-field"><span>截图位置：视频时长的 {form.episode_artwork_capture_percent}%</span><input type="range" min="5" max="90" step="5" value={form.episode_artwork_capture_percent} onChange={(event) => update("episode_artwork_capture_percent", Number(event.target.value))} disabled={!form.episode_artwork_fallback_enabled} /></label>
     </SettingsSection>
 
-    <div className="settings-savebar"><span>{save.isSuccess ? "设置已保存并生效" : save.isError ? "保存失败，请检查路径、Token 或代理地址" : "Token 不会通过接口回传"}</span><button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !form.media_root}>{save.isPending ? "保存中" : "保存设置"}</button></div>
+    <div className="settings-savebar"><span>{save.isSuccess ? `设置已生效，正在扫描 ${settings.data?.media_root ?? form.media_root}` : save.isError ? save.error.message : "Token 不会通过接口回传"}</span><button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !form.media_root}>{save.isPending ? "保存中" : "保存设置"}</button></div>
   </div>;
 }
 

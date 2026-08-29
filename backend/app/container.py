@@ -6,12 +6,16 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.episode_mapping_suggestion_service import (
+    EpisodeMappingSuggestionService,
+)
 from app.application.media_service import MediaLibraryService
 from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
 from app.core.config import Settings
+from app.core.path_safety import path_is_within
 from app.domain.filename_parser import FilenameParser
 from app.infrastructure.filesystem.ignore_marker import IgnoreMarkerManager
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
@@ -21,6 +25,7 @@ from app.infrastructure.media.ffprobe import FfprobeMediaProbe
 from app.infrastructure.media.remote_artwork import HttpRemoteArtworkDownloader
 from app.infrastructure.persistence.binding_repository import SqlAlchemyBindingRepository
 from app.infrastructure.persistence.database import create_session_factory, initialize_database
+from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 from app.infrastructure.persistence.settings_repository import SqlAlchemySettingsRepository
 from app.infrastructure.providers.bangumi import BangumiMetadataProvider
 from app.infrastructure.providers.image_proxy import BangumiImageProxy
@@ -35,6 +40,7 @@ class Container:
     naming_service: NamingPreviewService
     nfo_service: NfoPreviewService
     nfo_generation_service: NfoGenerationService
+    episode_mapping_suggestion_service: EpisodeMappingSuggestionService
     media_probe: FfprobeMediaProbe
     episode_artwork_generator: FfmpegEpisodeArtworkGenerator
     bangumi: BangumiMetadataProvider
@@ -44,6 +50,7 @@ class Container:
     ignore_markers: IgnoreMarkerManager
     remote_artwork: HttpRemoteArtworkDownloader
     provider_artwork_cache: ProviderArtworkCache
+    result_cache: SqlAlchemyResultCache
 
 
 def build_container(settings: Settings) -> Container:
@@ -51,8 +58,9 @@ def build_container(settings: Settings) -> Container:
     factory = create_session_factory(settings.database_url)
     initialize_database(factory)
     app_settings = SqlAlchemySettingsRepository(factory)
+    result_cache = SqlAlchemyResultCache(factory)
     settings = _effective_settings(settings, app_settings)
-    catalog = FileSystemMediaCatalog(settings.media_root, settings.allowed_media_root)
+    catalog = FileSystemMediaCatalog(settings.media_root, settings.allowed_media_roots)
     ignore_markers = IgnoreMarkerManager(
         settings.media_root,
         settings.ignore_marker_enabled,
@@ -94,6 +102,9 @@ def build_container(settings: Settings) -> Container:
     service = MediaLibraryService(catalog, repository, providers, nfo_catalog)
     naming_service = NamingPreviewService(catalog, repository, FilenameParser())
     nfo_service = NfoPreviewService(catalog, repository, FilenameParser())
+    episode_mapping_suggestion_service = EpisodeMappingSuggestionService(
+        catalog, providers, FilenameParser()
+    )
     media_probe = FfprobeMediaProbe(
         executable=settings.ffprobe_path,
         timeout_seconds=settings.ffprobe_timeout_seconds,
@@ -134,6 +145,7 @@ def build_container(settings: Settings) -> Container:
         naming_service=naming_service,
         nfo_service=nfo_service,
         nfo_generation_service=nfo_generation_service,
+        episode_mapping_suggestion_service=episode_mapping_suggestion_service,
         media_probe=media_probe,
         episode_artwork_generator=episode_artwork_generator,
         bangumi=bangumi,
@@ -143,6 +155,7 @@ def build_container(settings: Settings) -> Container:
         ignore_markers=ignore_markers,
         remote_artwork=remote_artwork,
         provider_artwork_cache=provider_artwork_cache,
+        result_cache=result_cache,
     )
 
 
@@ -159,7 +172,7 @@ def _effective_settings(
     ignore_folder_patterns = app_settings.get("ignore_folder_patterns")
     return replace(
         settings,
-        media_root=Path(media_root).resolve(strict=False) if media_root else settings.media_root,
+        media_root=_stored_media_root(media_root, settings),
         operation_mode=(
             operation_mode
             if operation_mode in {"nfo_create_only", "nfo_managed_update"}
@@ -186,6 +199,18 @@ def _effective_settings(
             ignore_folder_patterns, settings.ignore_folder_patterns
         ),
     )
+
+
+def _stored_media_root(value: str | None, settings: Settings) -> Path:
+    if not value:
+        return settings.media_root
+    candidate = Path(value).expanduser().resolve(strict=False)
+    if (
+        candidate.is_dir()
+        and any(path_is_within(candidate, root) for root in settings.allowed_media_roots)
+    ):
+        return candidate
+    return settings.media_root
 
 
 def _stored_patterns(value: str | None, fallback: tuple[str, ...]) -> tuple[str, ...]:

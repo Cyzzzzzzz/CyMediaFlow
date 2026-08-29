@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.path_safety import path_is_within
 from app.domain.media import ExternalIdentity, MediaItem
 
 VIDEO_EXTENSIONS = {
@@ -25,9 +26,10 @@ SEASON_DIRECTORY = re.compile(r"^Season\s+(\d+)$", re.IGNORECASE)
 
 
 class FileSystemMediaCatalog:
-    def __init__(self, media_root: Path, allowed_root: Path) -> None:
+    def __init__(self, media_root: Path, allowed_root: Path | tuple[Path, ...]) -> None:
         self._root = media_root.resolve(strict=False)
-        self._allowed_root = allowed_root.resolve(strict=False)
+        roots = allowed_root if isinstance(allowed_root, tuple) else (allowed_root,)
+        self._allowed_roots = tuple(root.resolve(strict=False) for root in roots)
         self._assert_within_allowed(self._root)
 
     def list_media(self) -> list[MediaItem]:
@@ -159,7 +161,5 @@ class FileSystemMediaCatalog:
         return next((path for path in files if path.name.casefold() == "tvshow.nfo"), None)
 
     def _assert_within_allowed(self, path: Path) -> None:
-        try:
-            path.relative_to(self._allowed_root)
-        except ValueError as exc:
-            raise ValueError(f"Media path is outside the allowed root: {path}") from exc
+        if not any(path_is_within(path, root) for root in self._allowed_roots):
+            raise ValueError(f"Media path is outside the allowed root: {path}")

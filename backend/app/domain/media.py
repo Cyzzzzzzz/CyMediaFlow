@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -135,6 +135,42 @@ class ProviderEpisode:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderSubjectBinding:
+    """One remote subject associated with a local library work."""
+
+    provider: str
+    external_id: str
+    title: str
+    original_title: str | None = None
+    image_url: str | None = None
+    role: str = "season_part"
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeSourceRule:
+    """Maps a local season/episode range to one remote subject."""
+
+    provider: str
+    external_id: str
+    local_season: int
+    local_episode_start: int
+    local_episode_end: int | None = None
+    provider_episode_start: int = 1
+    provider_season: int = 1
+    number_mode: str = "episode"
+
+    def contains(self, season: int, episode: int) -> bool:
+        return (
+            season == self.local_season
+            and episode >= self.local_episode_start
+            and (self.local_episode_end is None or episode <= self.local_episode_end)
+        )
+
+    def provider_episode_number(self, local_episode: int) -> int:
+        return self.provider_episode_start + local_episode - self.local_episode_start
+
+
+@dataclass(frozen=True, slots=True)
 class ScrapeBinding:
     media_id: str
     bangumi_id: str | None = None
@@ -149,3 +185,103 @@ class ScrapeBinding:
     emby_enabled: bool = True
     image_url: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
+    provider_subjects: tuple[ProviderSubjectBinding, ...] = ()
+    episode_source_rules: tuple[EpisodeSourceRule, ...] = ()
+
+
+def normalize_primary_binding(binding: ScrapeBinding) -> ScrapeBinding:
+    """Return a binding whose primary provider always points at a real subject.
+
+    Older UI versions could leave ``primary_provider`` set to TMDB after the TMDB
+    tab was merely viewed, even when the work only contained Bangumi subjects.
+    Keep the invariant in the domain layer so reads and NFO generation cannot use
+    that stale provider value.
+    """
+
+    metadata = dict(binding.metadata)
+    configured_provider = metadata.get("primary_provider")
+    configured_provider = (
+        configured_provider
+        if configured_provider in {"bangumi", "tmdb"}
+        else None
+    )
+    subjects = binding.provider_subjects
+
+    if not subjects:
+        valid_provider = None
+        if configured_provider == "bangumi" and binding.bangumi_id:
+            valid_provider = "bangumi"
+        elif configured_provider == "tmdb" and binding.tmdb_id:
+            valid_provider = "tmdb"
+        elif binding.bangumi_id:
+            valid_provider = "bangumi"
+        elif binding.tmdb_id:
+            valid_provider = "tmdb"
+        if valid_provider:
+            metadata["primary_provider"] = valid_provider
+        else:
+            metadata.pop("primary_provider", None)
+        return replace(binding, metadata=metadata)
+
+    explicit_primaries = [subject for subject in subjects if subject.role == "primary"]
+    primary = explicit_primaries[0] if len(explicit_primaries) == 1 else None
+    if primary is None and configured_provider:
+        configured_id = (
+            binding.tmdb_id if configured_provider == "tmdb" else binding.bangumi_id
+        )
+        if configured_id:
+            primary = next(
+                (
+                    subject
+                    for subject in subjects
+                    if subject.provider == configured_provider
+                    and subject.external_id == configured_id
+                ),
+                None,
+            )
+    if primary is None and explicit_primaries:
+        primary = explicit_primaries[0]
+    if primary is None:
+        for provider, external_id in (
+            ("bangumi", binding.bangumi_id),
+            ("tmdb", binding.tmdb_id),
+        ):
+            if not external_id:
+                continue
+            primary = next(
+                (
+                    subject
+                    for subject in subjects
+                    if subject.provider == provider and subject.external_id == external_id
+                ),
+                None,
+            )
+            if primary is not None:
+                break
+    if primary is None:
+        primary = subjects[0]
+
+    primary_key = (primary.provider, primary.external_id)
+    normalized_subjects = tuple(
+        replace(
+            subject,
+            role=(
+                "primary"
+                if (subject.provider, subject.external_id) == primary_key
+                else "season_part"
+                if subject.role == "primary"
+                else subject.role
+            ),
+        )
+        for subject in subjects
+    )
+    metadata["primary_provider"] = primary.provider
+    return replace(
+        binding,
+        bangumi_id=(
+            primary.external_id if primary.provider == "bangumi" else binding.bangumi_id
+        ),
+        tmdb_id=(primary.external_id if primary.provider == "tmdb" else binding.tmdb_id),
+        metadata=metadata,
+        provider_subjects=normalized_subjects,
+    )

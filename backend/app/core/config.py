@@ -37,6 +37,7 @@ class Settings:
     allowed_media_root: Path
     data_dir: Path
     bangumi_token_file: Path
+    additional_allowed_media_roots: tuple[Path, ...] = ()
     bangumi_api_url: str = "https://api.bgm.tv"
     bangumi_user_agent: str = "CyMediaFlow/0.1 (local NAS administrator)"
     request_timeout_seconds: float = 15.0
@@ -58,6 +59,15 @@ class Settings:
     def database_url(self) -> str:
         return f"sqlite:///{(self.data_dir / 'cymediaflow.db').as_posix()}"
 
+    @property
+    def allowed_media_roots(self) -> tuple[Path, ...]:
+        return tuple(
+            dict.fromkeys(
+                root.resolve(strict=False)
+                for root in (self.allowed_media_root, *self.additional_allowed_media_roots)
+            )
+        )
+
     @classmethod
     def load(cls) -> Settings:
         local_file = PROJECT_ROOT / "config.local.json"
@@ -73,6 +83,10 @@ class Settings:
             os.getenv("CYMEDIAFLOW_ALLOWED_MEDIA_ROOT") or _string(local.get("allowed_media_root")),
             media_root,
         )
+        additional_allowed_roots = _path_tuple(
+            os.getenv("CYMEDIAFLOW_ADDITIONAL_ALLOWED_MEDIA_ROOTS")
+            or local.get("additional_allowed_media_roots")
+        )
         data_dir = _configured_path(
             os.getenv("CYMEDIAFLOW_DATA_DIR") or _string(local.get("data_dir")),
             PROJECT_ROOT / ".data",
@@ -86,6 +100,7 @@ class Settings:
             allowed_media_root=allowed_root,
             data_dir=data_dir,
             bangumi_token_file=token_file,
+            additional_allowed_media_roots=additional_allowed_roots,
             bangumi_api_url=os.getenv("CYMEDIAFLOW_BANGUMI_API_URL", "https://api.bgm.tv"),
             bangumi_user_agent=os.getenv(
                 "CYMEDIAFLOW_BANGUMI_USER_AGENT",
@@ -189,3 +204,19 @@ def _string_tuple(value: object, default: tuple[str, ...]) -> tuple[str, ...]:
         return default
     normalized = tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
     return normalized or default
+
+
+def _path_tuple(value: object) -> tuple[Path, ...]:
+    if isinstance(value, str):
+        values = value.splitlines() if "\n" in value else value.split(os.pathsep)
+    elif isinstance(value, list):
+        values = value
+    else:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            _configured_path(str(item).strip(), PROJECT_ROOT)
+            for item in values
+            if str(item).strip()
+        )
+    )

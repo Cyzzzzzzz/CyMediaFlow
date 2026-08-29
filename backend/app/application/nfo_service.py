@@ -5,9 +5,10 @@ from pathlib import Path
 
 from app.application.ports import BindingRepositoryPort, MediaCatalogPort
 from app.core.errors import MediaNotFoundError
-from app.domain.episode_mapping import resolve_episode_mapping
+from app.domain.episode_mapping import resolve_episode_mapping, resolve_local_season
 from app.domain.filename import ParsedMediaInfo
 from app.domain.filename_parser import FilenameParser
+from app.domain.media import EpisodeSourceRule
 from app.domain.media_classification import classify_media
 from app.domain.nfo import NfoPreview, NfoPreviewEntry
 
@@ -38,6 +39,8 @@ class NfoPreviewService:
         overwrite_existing: bool = False,
         bangumi_id: str | None = None,
         bangumi_episode_count: int | None = None,
+        episode_source_rules: tuple[EpisodeSourceRule, ...] | None = None,
+        excluded_folders: tuple[str, ...] | None = None,
     ) -> NfoPreview:
         item = self._catalog.get_media(media_id)
         if item is None:
@@ -65,6 +68,27 @@ class NfoPreviewService:
             bangumi_episode_count,
             binding.metadata.get("bangumi_episode_count") if binding else None,
         )
+        source_rules = (
+            episode_source_rules
+            if episode_source_rules is not None
+            else (binding.episode_source_rules if binding else ())
+        )
+        effective_excluded_folders = {
+            self._normalize_folder(folder)
+            for folder in (
+                excluded_folders
+                if excluded_folders is not None
+                else self._metadata_string_tuple(
+                    binding.metadata.get("nfo_excluded_folders") if binding else None
+                )
+            )
+        }
+        if mapping.uses_source_rules:
+            effective_bangumi_id = effective_bangumi_id or (
+                "multi-source" if source_rules else None
+            )
+            effective_episode_count = None
+        preview_offset = 0 if mapping.uses_source_rules else offset
 
         videos = self._catalog.list_video_files(media_id)
         nfo_files = self._catalog.list_nfo_files(media_id)
@@ -78,6 +102,9 @@ class NfoPreviewService:
         ]
         regular_video_count = sum(
             classify_media(relative, parsed) == "regular"
+            and not self._folder_is_excluded(
+                relative.parent.as_posix(), effective_excluded_folders
+            )
             for _, relative, parsed in parsed_videos
         )
         single_mapping_valid = mapping.is_single and regular_video_count == 1
@@ -89,7 +116,7 @@ class NfoPreviewService:
                     relative,
                     parsed,
                     configured_season,
-                    offset,
+                    preview_offset,
                     season_override=configured_season if single_mapping_valid else None,
                     episode_override=(
                         mapping.provider_episode_number if single_mapping_valid else None
@@ -136,7 +163,7 @@ class NfoPreviewService:
                 relative,
                 parsed,
                 configured_season,
-                offset,
+                preview_offset,
                 season_override=configured_season if single_mapping_valid else None,
                 episode_override=(
                     mapping.provider_episode_number if single_mapping_valid else None
@@ -162,11 +189,24 @@ class NfoPreviewService:
                     action = "create"
 
             mapped_episode = episode_key[2] if episode_key else None
-            parsed_local_episode = parsed.episode_start or parsed.absolute_episode_start
+            parsed_local_episode = self._parsed_episode(parsed)
+            parsed_local_season = resolve_local_season(
+                relative, parsed.season, configured_season
+            )
+            source_rule_mapped = not mapping.uses_source_rules or (
+                parsed_local_episode is not None
+                and any(
+                    rule.contains(parsed_local_season, parsed_local_episode)
+                    for rule in source_rules
+                )
+            )
+            folder_excluded = self._folder_is_excluded(
+                relative.parent.as_posix(), effective_excluded_folders
+            )
             invalid_local_episode = (
                 mapping.adjusts_local_episode
                 and parsed_local_episode is not None
-                and parsed_local_episode + mapping.local_episode_offset < 1
+                and parsed_local_episode + mapping.local_episode_offset < 0
             )
             selection_reason = self._selection_reason(
                 action=action,
@@ -177,6 +217,8 @@ class NfoPreviewService:
                 invalid_single_mapping=mapping.is_single and not single_mapping_valid,
                 overwrite_existing=overwrite_existing,
                 invalid_local_episode=invalid_local_episode,
+                source_rule_mapped=source_rule_mapped,
+                folder_excluded=folder_excluded,
             )
             if selection_reason and selection_reason not in warnings:
                 warnings.append(selection_reason)
@@ -234,11 +276,17 @@ class NfoPreviewService:
         if episode_override is not None:
             season = season_override if season_override is not None else configured_season
             return relative_path.parent.as_posix().casefold(), season, episode_override
-        episode = parsed.episode_start or parsed.absolute_episode_start
+        episode = NfoPreviewService._parsed_episode(parsed)
         if episode is None:
             return None
-        season = parsed.season if parsed.season is not None else configured_season
+        season = resolve_local_season(relative_path, parsed.season, configured_season)
         return relative_path.parent.as_posix().casefold(), season, episode + offset
+
+    @staticmethod
+    def _parsed_episode(parsed: ParsedMediaInfo) -> int | None:
+        if parsed.episode_start is not None:
+            return parsed.episode_start
+        return parsed.absolute_episode_start
 
     @staticmethod
     def _episode_count(request_value: int | None, stored_value: object) -> int | None:
@@ -259,19 +307,25 @@ class NfoPreviewService:
         invalid_single_mapping: bool = False,
         overwrite_existing: bool = False,
         invalid_local_episode: bool = False,
+        source_rule_mapped: bool = True,
+        folder_excluded: bool = False,
     ) -> str | None:
         if invalid_single_mapping:
             return "SINGLE_EPISODE_MAPPING_REQUIRES_ONE_VIDEO"
+        if folder_excluded:
+            return "FOLDER_EXCLUDED"
+        if category != "regular":
+            return "NON_BANGUMI_CONTENT"
         if invalid_local_episode:
             return "INVALID_LOCAL_EPISODE_NUMBER"
+        if not source_rule_mapped:
+            return "EPISODE_SOURCE_NOT_MAPPED"
         if action == "conflict":
             return "TARGET_NFO_CONFLICT"
         if action == "unchanged" and not overwrite_existing:
             return "NFO_ACTION_NOT_REQUIRED"
         if action not in {"create", "rename", "unchanged"}:
             return "NFO_ACTION_NOT_REQUIRED"
-        if category != "regular":
-            return "NON_BANGUMI_CONTENT"
         if not bangumi_id:
             return "BANGUMI_NOT_MATCHED"
         if (
@@ -281,3 +335,24 @@ class NfoPreviewService:
         ):
             return "EPISODE_OUTSIDE_BANGUMI_RANGE"
         return None
+
+    @staticmethod
+    def _metadata_string_tuple(value: object) -> tuple[str, ...]:
+        if not isinstance(value, list):
+            return ()
+        return tuple(item for item in value if isinstance(item, str))
+
+    @staticmethod
+    def _normalize_folder(value: str) -> str:
+        normalized = Path(value.replace("\\", "/")).as_posix().strip("/").casefold()
+        return normalized or "."
+
+    @classmethod
+    def _folder_is_excluded(cls, folder: str, excluded_folders: set[str]) -> bool:
+        normalized = cls._normalize_folder(folder)
+        return any(
+            excluded == "."
+            or normalized == excluded
+            or normalized.startswith(f"{excluded}/")
+            for excluded in excluded_folders
+        )

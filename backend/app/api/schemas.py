@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.domain.filename import FileRole, NamingPreview, NamingPreviewEntry, ParsedMediaInfo
+from app.domain.mapping_suggestion import EpisodeMappingSuggestion
 from app.domain.media import (
+    EpisodeSourceRule,
     ExternalIdentity,
     MediaItem,
     MetadataCandidate,
@@ -14,6 +16,7 @@ from app.domain.media import (
     ProviderPerson,
     ProviderRating,
     ProviderRelatedSubject,
+    ProviderSubjectBinding,
     ProviderTag,
     ScrapeBinding,
 )
@@ -24,6 +27,104 @@ from app.domain.scrape import LocalScrapeInfo
 class ExternalIdentityView(BaseModel):
     provider: str
     external_id: str
+
+
+class ProviderSubjectBindingView(BaseModel):
+    provider: Literal["bangumi", "tmdb"]
+    external_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=500)
+    original_title: str | None = Field(default=None, max_length=500)
+    image_url: str | None = Field(default=None, max_length=2048)
+    role: Literal[
+        "primary",
+        "season",
+        "season_part",
+        "movie",
+        "special",
+        "related",
+        "metadata_only",
+    ] = "season_part"
+
+    @classmethod
+    def from_domain(cls, subject: ProviderSubjectBinding) -> ProviderSubjectBindingView:
+        return cls(
+            provider=subject.provider,  # type: ignore[arg-type]
+            external_id=subject.external_id,
+            title=subject.title,
+            original_title=subject.original_title,
+            image_url=subject.image_url,
+            role=subject.role,  # type: ignore[arg-type]
+        )
+
+    def to_domain(self) -> ProviderSubjectBinding:
+        return ProviderSubjectBinding(**self.model_dump())
+
+
+class EpisodeSourceRuleView(BaseModel):
+    provider: Literal["bangumi", "tmdb"]
+    external_id: str = Field(min_length=1, max_length=100)
+    local_season: int = Field(ge=0, le=99)
+    local_episode_start: int = Field(ge=0, le=100000)
+    local_episode_end: int | None = Field(default=None, ge=0, le=100000)
+    provider_episode_start: int = Field(default=1, ge=0, le=100000)
+    provider_season: int = Field(default=1, ge=0, le=99)
+    number_mode: Literal["episode", "sort"] = "episode"
+
+    @model_validator(mode="after")
+    def validate_range(self) -> EpisodeSourceRuleView:
+        if (
+            self.local_episode_end is not None
+            and self.local_episode_end < self.local_episode_start
+        ):
+            raise ValueError("local_episode_end must be greater than or equal to start")
+        return self
+
+    @classmethod
+    def from_domain(cls, rule: EpisodeSourceRule) -> EpisodeSourceRuleView:
+        return cls(
+            provider=rule.provider,  # type: ignore[arg-type]
+            external_id=rule.external_id,
+            local_season=rule.local_season,
+            local_episode_start=rule.local_episode_start,
+            local_episode_end=rule.local_episode_end,
+            provider_episode_start=rule.provider_episode_start,
+            provider_season=rule.provider_season,
+            number_mode=rule.number_mode,  # type: ignore[arg-type]
+        )
+
+    def to_domain(self) -> EpisodeSourceRule:
+        return EpisodeSourceRule(**self.model_dump())
+
+
+class EpisodeMappingSuggestionRequest(BaseModel):
+    provider_subjects: list[ProviderSubjectBindingView] = Field(default_factory=list)
+    default_season: int = Field(default=1, ge=0, le=99)
+
+
+class DetectedEpisodeRangeView(BaseModel):
+    season_number: int
+    episode_start: int
+    episode_end: int
+    episode_count: int
+
+
+class EpisodeMappingSuggestionView(BaseModel):
+    rules: list[EpisodeSourceRuleView]
+    detected_ranges: list[DetectedEpisodeRangeView]
+    warnings: list[str]
+
+    @classmethod
+    def from_domain(
+        cls, suggestion: EpisodeMappingSuggestion
+    ) -> EpisodeMappingSuggestionView:
+        return cls(
+            rules=[EpisodeSourceRuleView.from_domain(rule) for rule in suggestion.rules],
+            detected_ranges=[
+                DetectedEpisodeRangeView.model_validate(detected, from_attributes=True)
+                for detected in suggestion.detected_ranges
+            ],
+            warnings=list(suggestion.warnings),
+        )
 
 
 class ScrapeBindingView(BaseModel):
@@ -39,6 +140,39 @@ class ScrapeBindingView(BaseModel):
     emby_enabled: bool = True
     image_url: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provider_subjects: list[ProviderSubjectBindingView] = Field(default_factory=list)
+    episode_source_rules: list[EpisodeSourceRuleView] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_work_matching(self) -> ScrapeBindingView:
+        subject_keys = [
+            (subject.provider, subject.external_id) for subject in self.provider_subjects
+        ]
+        if len(subject_keys) != len(set(subject_keys)):
+            raise ValueError("provider_subjects contains duplicate provider/external_id pairs")
+
+        known_subjects = set(subject_keys)
+        if self.bangumi_id:
+            known_subjects.add(("bangumi", self.bangumi_id))
+        if self.tmdb_id:
+            known_subjects.add(("tmdb", self.tmdb_id))
+        for rule in self.episode_source_rules:
+            if (rule.provider, rule.external_id) not in known_subjects:
+                raise ValueError("episode source rule must reference an associated subject")
+
+        by_season: dict[int, list[EpisodeSourceRuleView]] = {}
+        for rule in self.episode_source_rules:
+            existing = by_season.setdefault(rule.local_season, [])
+            if any(self._ranges_overlap(rule, other) for other in existing):
+                raise ValueError("episode source rules cannot overlap in the same local season")
+            existing.append(rule)
+        return self
+
+    @staticmethod
+    def _ranges_overlap(left: EpisodeSourceRuleView, right: EpisodeSourceRuleView) -> bool:
+        left_end = left.local_episode_end if left.local_episode_end is not None else 100001
+        right_end = right.local_episode_end if right.local_episode_end is not None else 100001
+        return left.local_episode_start <= right_end and right.local_episode_start <= left_end
 
     @classmethod
     def from_domain(cls, binding: ScrapeBinding | None) -> ScrapeBindingView | None:
@@ -57,6 +191,14 @@ class ScrapeBindingView(BaseModel):
             emby_enabled=binding.emby_enabled,
             image_url=binding.image_url,
             metadata=binding.metadata,
+            provider_subjects=[
+                ProviderSubjectBindingView.from_domain(subject)
+                for subject in binding.provider_subjects
+            ],
+            episode_source_rules=[
+                EpisodeSourceRuleView.from_domain(rule)
+                for rule in binding.episode_source_rules
+            ],
         )
 
     def to_domain(self, media_id: str) -> ScrapeBinding:
@@ -74,6 +216,8 @@ class ScrapeBindingView(BaseModel):
             emby_enabled=self.emby_enabled,
             image_url=self.image_url,
             metadata=self.metadata,
+            provider_subjects=tuple(subject.to_domain() for subject in self.provider_subjects),
+            episode_source_rules=tuple(rule.to_domain() for rule in self.episode_source_rules),
         )
 
 
@@ -139,17 +283,21 @@ class MediaItemView(BaseModel):
 class MetadataSearchRequest(BaseModel):
     query: str | None = Field(default=None, max_length=500)
     provider: Literal["bangumi", "tmdb"] = "bangumi"
+    limit: int = Field(default=10, ge=1, le=20)
+    refresh: bool = False
 
 
 class MetadataDetailRequest(BaseModel):
     external_id: str = Field(min_length=1, max_length=100)
     provider: Literal["bangumi", "tmdb"] = "bangumi"
+    refresh: bool = False
 
 
 class MetadataEpisodesRequest(BaseModel):
     external_id: str = Field(min_length=1, max_length=100)
     provider: Literal["bangumi", "tmdb"] = "bangumi"
     season_number: int = Field(default=1, ge=0, le=99)
+    refresh: bool = False
 
 
 class ProviderInfoboxValueView(BaseModel):
@@ -350,6 +498,7 @@ class ProviderEpisodeView(BaseModel):
 class SettingsView(BaseModel):
     media_root: str
     allowed_media_root: str
+    allowed_media_roots: list[str] = Field(default_factory=list)
     media_root_exists: bool
     media_root_readable: bool
     bangumi_configured: bool
@@ -392,6 +541,14 @@ class SettingsUpdate(BaseModel):
     ffmpeg_path: str | None = Field(default=None, min_length=1, max_length=2000)
     ignore_marker_enabled: bool | None = None
     ignore_folder_patterns: list[str] | None = Field(default=None, max_length=100)
+
+    @field_validator("media_root")
+    @classmethod
+    def normalize_media_root(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("媒体目录不能为空")
+        return normalized
 
     @field_validator("ignore_folder_patterns")
     @classmethod
@@ -527,13 +684,16 @@ class NamingPreviewView(BaseModel):
 class NfoPreviewRequest(BaseModel):
     season_number: int | None = Field(default=None, ge=0, le=99)
     episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
-    episode_mapping_mode: Literal["auto", "manual", "single"] | None = None
+    episode_mapping_mode: Literal["auto", "manual", "single", "segments"] | None = None
     local_episode_number: int | None = Field(default=None, ge=1, le=100000)
     provider_episode_number: int | None = Field(default=None, ge=1, le=100000)
     local_episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
     overwrite_existing: bool = False
     bangumi_id: str | None = Field(default=None, max_length=100)
     bangumi_episode_count: int | None = Field(default=None, ge=0, le=100000)
+    episode_source_rules: tuple[EpisodeSourceRuleView, ...] | None = None
+    excluded_folders: tuple[str, ...] | None = Field(default=None, max_length=10000)
+    refresh: bool = False
 
 
 class NfoPreviewEntryView(BaseModel):
@@ -607,11 +767,12 @@ class NfoGenerationRequest(BaseModel):
     tmdb_id: str | None = Field(default=None, max_length=100)
     season_number: int | None = Field(default=None, ge=0, le=99)
     episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
-    episode_mapping_mode: Literal["auto", "manual", "single"] | None = None
+    episode_mapping_mode: Literal["auto", "manual", "single", "segments"] | None = None
     local_episode_number: int | None = Field(default=None, ge=1, le=100000)
     provider_episode_number: int | None = Field(default=None, ge=1, le=100000)
     local_episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
     excluded_paths: tuple[str, ...] = Field(default=(), max_length=100000)
+    excluded_folders: tuple[str, ...] = Field(default=(), max_length=10000)
     included_paths: tuple[str, ...] = Field(default=(), max_length=100000)
     overwrite_existing: bool = False
     locked_fields: tuple[str, ...] = Field(default=(), max_length=10000)

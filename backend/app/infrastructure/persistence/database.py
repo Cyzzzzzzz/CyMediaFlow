@@ -46,6 +46,20 @@ class AppSettingRecord(Base):
     )
 
 
+class CachedResultRecord(Base):
+    __tablename__ = "cached_results"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    media_id: Mapped[str] = mapped_column(String(64), index=True)
+    category: Mapped[str] = mapped_column(String(50), index=True)
+    payload_json: Mapped[Any] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 def create_session_factory(database_url: str) -> sessionmaker[Session]:
     engine = create_engine(
         database_url,

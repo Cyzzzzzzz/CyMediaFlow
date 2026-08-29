@@ -12,7 +12,13 @@ from app.application.ports import (
     NfoCatalogPort,
 )
 from app.core.errors import MediaNotFoundError, ProviderUnavailableError
-from app.domain.media import MediaItem, MetadataCandidate, ProviderEpisode, ScrapeBinding
+from app.domain.media import (
+    MediaItem,
+    MetadataCandidate,
+    ProviderEpisode,
+    ScrapeBinding,
+    normalize_primary_binding,
+)
 from app.domain.scrape import LocalScrapeInfo
 
 
@@ -110,17 +116,18 @@ class MediaLibraryService:
         media_id: str,
         query: str | None,
         provider: str = "bangumi",
+        limit: int = 10,
     ) -> list[MetadataCandidate]:
         item, binding = self.get_media(media_id)
         search_query = query or (binding.preferred_title if binding else None) or item.title
         selected_provider = self._provider(provider)
-        results = await selected_provider.search(search_query)
+        results = await selected_provider.search(search_query, limit=limit)
         if results or provider != "tmdb":
             return results
         alternative = await self._tmdb_alternative_query(item, binding, search_query)
         if not alternative or alternative.casefold() == search_query.casefold():
             return results
-        return await selected_provider.search(alternative)
+        return await selected_provider.search(alternative, limit=limit)
 
     async def get_metadata_detail(
         self,
@@ -216,5 +223,7 @@ class MediaLibraryService:
                 emby_enabled=binding.emby_enabled,
                 image_url=binding.image_url,
                 metadata=binding.metadata,
+                provider_subjects=binding.provider_subjects,
+                episode_source_rules=binding.episode_source_rules,
             )
-        return self._bindings.upsert(binding)
+        return self._bindings.upsert(normalize_primary_binding(binding))

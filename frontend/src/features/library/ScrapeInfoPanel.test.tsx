@@ -53,9 +53,9 @@ describe("ScrapeInfoPanel", () => {
     />);
 
     expect(screen.getByText("Bangumi 完整条目信息")).toBeTruthy();
-    expect(screen.getByText("尚未加载完整信息")).toBeTruthy();
+    expect(screen.getByText("尚未配置 Bangumi 季度条目")).toBeTruthy();
     fireEvent.click(screen.getByText("Bangumi 完整条目信息"));
-    expect(screen.getByText(/点击上方.*刮削元数据/)).toBeTruthy();
+    expect(screen.getByText(/请先将 Bangumi 条目设为主作品/)).toBeTruthy();
   });
 
   it("requires an explicit confirmation before generating missing NFO files", () => {
@@ -136,9 +136,9 @@ describe("ScrapeInfoPanel", () => {
     />);
 
     expect(screen.getByText("TMDB 元数据")).toBeTruthy();
-    expect(screen.getByText("已重新获取 TMDB 元数据")).toBeTruthy();
-    expect(screen.getByText("TMDB 自动补全")).toBeTruthy();
-    expect(screen.queryByText("已重新获取 Bangumi 元数据")).toBeNull();
+    expect(screen.getByText("已读取最新 TMDB 元数据，尚未写入 NFO")).toBeTruthy();
+    expect(screen.getByText("TMDB 主作品自动补全")).toBeTruthy();
+    expect(screen.queryByText("已读取最新 Bangumi 元数据，尚未写入 NFO")).toBeNull();
   });
 
   it("expands remote episode scrape data and collapses it on the second click", () => {
@@ -164,6 +164,53 @@ describe("ScrapeInfoPanel", () => {
     expect(screen.getByRole("img", { name: "第 1 集刮削图片" })).toBeTruthy();
     fireEvent.click(episode);
     expect(screen.queryByText("TMDB 分集刮削数据")).toBeNull();
+  });
+
+  it("does not overwrite another local season with the currently browsed subject", () => {
+    const segmentedInfo: LocalScrapeInfo = {
+      ...localInfo,
+      seasons: [
+        {
+          ...localInfo.seasons[0],
+          episodes: [{
+            ...localInfo.seasons[0].episodes[0],
+            title: "本地第一季第一集",
+            external_ids: [{ provider: "bangumi", external_id: "episode-s1-1" }],
+          }],
+        },
+        {
+          ...localInfo.seasons[0],
+          season_number: 2,
+          title: "本地第二季",
+          nfo_relative_path: "Season 2/season.nfo",
+          episodes: [{
+            ...localInfo.seasons[0].episodes[0],
+            season_number: 2,
+            title: "本地第二季第一集",
+            external_ids: [{ provider: "bangumi", external_id: "episode-s2-1" }],
+            nfo_relative_path: "Season 2/E01.nfo",
+          }],
+        },
+      ],
+    };
+    render(<ScrapeInfoPanel
+      provider="bangumi"
+      localInfo={segmentedInfo}
+      providerInfo={undefined}
+      providerEpisodes={[{
+        provider: "bangumi", external_id: "episode-s1-1", episode_number: 1,
+        title: "远程第一季第一集", original_title: null,
+        air_date: null, summary: "第一季远程简介", runtime_minutes: 24,
+        image_url: null,
+      }]}
+      seasonNumber={1}
+      loading={false}
+      error={false}
+    />);
+
+    expect(screen.getByText("远程第一季第一集")).toBeTruthy();
+    expect(screen.getByText("本地第二季第一集")).toBeTruthy();
+    expect(screen.queryByText("本地第一季第一集")).toBeNull();
   });
 
   it("batch locks each series, season, and episode field group independently", () => {
@@ -251,6 +298,57 @@ describe("ScrapeInfoPanel", () => {
     );
     fireEvent.error(personImage);
     expect(screen.queryByRole("img", { name: "古賀一臣" })).toBeNull();
+  });
+
+  it("groups complete Bangumi subjects by their mapped local season", () => {
+    render(<ScrapeInfoPanel
+      provider="tmdb"
+      generationProvider="bangumi"
+      localInfo={localInfo}
+      providerInfo={undefined}
+      bangumiSeasonGroups={[
+        {
+          seasonNumber: 1,
+          subjects: [
+            { externalId: "277554", title: "无职转生 第一季", imageUrl: null, ranges: ["E01–E11"], metadata: undefined, loading: false, error: false },
+            { externalId: "325585", title: "无职转生 第一季 第2部分", imageUrl: null, ranges: ["E12–E23"], metadata: undefined, loading: false, error: false },
+          ],
+        },
+        {
+          seasonNumber: 2,
+          subjects: [
+            { externalId: "373247", title: "无职转生 第二季", imageUrl: null, ranges: ["E01–E12"], metadata: undefined, loading: false, error: false },
+          ],
+        },
+      ]}
+      loading={false}
+      error={false}
+    />);
+
+    expect(screen.getByText("2 个本地季度 · 3 个映射条目 · 已加载 0")).toBeTruthy();
+    fireEvent.click(screen.getByText("Bangumi 完整条目信息"));
+    expect(screen.getByText("无职转生 第一季")).toBeTruthy();
+    expect(screen.getByText("无职转生 第一季 第2部分")).toBeTruthy();
+    expect(screen.getByText(/Bangumi #325585 · 本地 E12–E23/)).toBeTruthy();
+    expect(screen.getByText("无职转生 第二季")).toBeTruthy();
+  });
+
+  it("keeps remote-read success separate from an actionable NFO generation error", () => {
+    render(<ScrapeInfoPanel
+      provider="tmdb"
+      generationProvider="bangumi"
+      localInfo={localInfo}
+      providerInfo={undefined}
+      loading={false}
+      error={false}
+      scrapeMetadataSuccess
+      generationError
+      generationErrorMessage="Bangumi 条目 277554 无法读取"
+    />);
+
+    expect(screen.getByText("已读取最新 TMDB 元数据，尚未写入 NFO")).toBeTruthy();
+    expect(screen.getByText("Bangumi 主作品自动补全")).toBeTruthy();
+    expect(screen.getByText("NFO 更新失败：Bangumi 条目 277554 无法读取")).toBeTruthy();
   });
 
   it("explains missing ffmpeg tools after a partial NFO update", () => {

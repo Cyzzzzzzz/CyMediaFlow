@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from xml.etree import ElementTree as ET
 
 from fastapi.testclient import TestClient
@@ -115,6 +115,36 @@ def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None
                 "naming_excluded_paths": ["Season 1/Example Show E01.mkv"],
                 "naming_included_paths": [],
             },
+            "provider_subjects": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "12345",
+                    "title": "示例动画",
+                    "original_title": "Example Show",
+                    "image_url": "https://example.test/poster.jpg",
+                    "role": "primary",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "67890",
+                    "title": "示例动画 后半",
+                    "original_title": None,
+                    "image_url": None,
+                    "role": "season_part",
+                },
+            ],
+            "episode_source_rules": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "12345",
+                    "local_season": 1,
+                    "local_episode_start": 1,
+                    "local_episode_end": 11,
+                    "provider_episode_start": 1,
+                    "provider_season": 1,
+                    "number_mode": "sort",
+                }
+            ],
         }
         saved = client.put(f"/api/v1/media/{item['id']}/scrape-config", json=binding)
         detail = client.get(f"/api/v1/media/{item['id']}")
@@ -125,7 +155,268 @@ def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None
     assert detail.json()["data"]["binding"]["metadata"]["naming_excluded_paths"] == [
         "Season 1/Example Show E01.mkv"
     ]
+    assert detail.json()["data"]["binding"]["provider_subjects"][1]["external_id"] == "67890"
+    assert detail.json()["data"]["binding"]["episode_source_rules"][0]["number_mode"] == "sort"
     assert video.read_bytes() == b"untouched-video"
+
+
+def test_episode_mapping_suggestion_splits_bangumi_cours_by_remote_sort(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    season = media_root / "Split Show" / "Season 1"
+    season.mkdir(parents=True)
+    for episode in range(1, 5):
+        (season / f"Split Show S01E{episode:02}.mkv").write_bytes(b"video")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    async def episodes_for(external_id: str, _season_number: int):
+        start = 1 if external_id == "111" else 3
+        return tuple(
+            ProviderEpisode(
+                f"{external_id}-{number}",
+                number - start + 1,
+                f"Episode {number}",
+                None,
+                None,
+                None,
+                24,
+                subject_id=external_id,
+                sort_number=number,
+            )
+            for number in range(start, start + 2)
+        )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            side_effect=episodes_for
+        )
+        response = client.post(
+            f"/api/v1/media/{media_id}/episode-mapping/suggest",
+            json={
+                "default_season": 1,
+                "provider_subjects": [
+                    {
+                        "provider": "bangumi",
+                        "external_id": "111",
+                        "title": "Split Show",
+                        "role": "primary",
+                    },
+                    {
+                        "provider": "bangumi",
+                        "external_id": "222",
+                        "title": "Split Show Part 2",
+                        "role": "season_part",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    result = response.json()["data"]
+    assert result["detected_ranges"] == [
+        {"season_number": 1, "episode_start": 1, "episode_end": 4, "episode_count": 4}
+    ]
+    assert result["warnings"] == []
+    assert result["rules"] == [
+        {
+            "provider": "bangumi",
+            "external_id": "111",
+            "local_season": 1,
+            "local_episode_start": 1,
+            "local_episode_end": 2,
+            "provider_episode_start": 1,
+            "provider_season": 1,
+            "number_mode": "sort",
+        },
+        {
+            "provider": "bangumi",
+            "external_id": "222",
+            "local_season": 1,
+            "local_episode_start": 3,
+            "local_episode_end": 4,
+            "provider_episode_start": 3,
+            "provider_season": 1,
+            "number_mode": "sort",
+        },
+    ]
+
+
+def test_episode_mapping_suggestion_reuses_tmdb_show_for_each_local_season(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Two Season Show"
+    for season_number in (1, 2):
+        season = series / f"Season {season_number}"
+        season.mkdir(parents=True)
+        (season / f"Two Season Show S{season_number:02}E01.mkv").write_bytes(b"video")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.tmdb.get_episodes = AsyncMock(
+            return_value=(
+                ProviderEpisode(
+                    "tmdb-1",
+                    1,
+                    "Episode 1",
+                    None,
+                    None,
+                    None,
+                    24,
+                    provider="tmdb",
+                ),
+            )
+        )
+        response = client.post(
+            f"/api/v1/media/{media_id}/episode-mapping/suggest",
+            json={
+                "default_season": 1,
+                "provider_subjects": [
+                    {
+                        "provider": "tmdb",
+                        "external_id": "88",
+                        "title": "Two Season Show",
+                        "role": "primary",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    rules = response.json()["data"]["rules"]
+    assert [rule["provider_season"] for rule in rules] == [1, 2]
+    assert [rule["local_season"] for rule in rules] == [1, 2]
+    assert client.app.state.container.tmdb.get_episodes.await_args_list[0].args == ("88", 1)
+    assert client.app.state.container.tmdb.get_episodes.await_args_list[1].args == ("88", 2)
+
+
+def test_episode_mapping_suggestion_uses_title_season_hints_for_split_cours(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Long Running Show"
+    for season_number in (1, 2):
+        season = series / f"Season {season_number}"
+        season.mkdir(parents=True)
+        for episode in range(1, 5):
+            (season / f"Show S{season_number:02}E{episode:02}.mkv").write_bytes(b"video")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    async def episodes_for(external_id: str, _season_number: int):
+        first_sort = 3 if external_id in {"part-1", "part-2"} else 1
+        return tuple(
+            ProviderEpisode(
+                f"{external_id}-{number}",
+                number - first_sort + 1,
+                f"Episode {number}",
+                None,
+                None,
+                None,
+                24,
+                subject_id=external_id,
+                sort_number=number,
+            )
+            for number in range(first_sort, first_sort + 2)
+        )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            side_effect=episodes_for
+        )
+        response = client.post(
+            f"/api/v1/media/{media_id}/episode-mapping/suggest",
+            json={
+                "default_season": 1,
+                "provider_subjects": [
+                    {
+                        "provider": "bangumi",
+                        "external_id": "main-1",
+                        "title": "Long Running Show",
+                        "role": "primary",
+                    },
+                    {
+                        "provider": "bangumi",
+                        "external_id": "part-1",
+                        "title": "Long Running Show Part 2",
+                        "role": "season_part",
+                    },
+                    {
+                        "provider": "bangumi",
+                        "external_id": "main-2",
+                        "title": "Long Running Show 第二季",
+                        "role": "season_part",
+                    },
+                    {
+                        "provider": "bangumi",
+                        "external_id": "part-2",
+                        "title": "Long Running Show 第二季 第2部分",
+                        "role": "season_part",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    rules = response.json()["data"]["rules"]
+    assert [rule["external_id"] for rule in rules] == [
+        "main-1",
+        "part-1",
+        "main-2",
+        "part-2",
+    ]
+    assert [rule["local_season"] for rule in rules] == [1, 1, 2, 2]
+    assert [rule["local_episode_start"] for rule in rules] == [1, 3, 1, 3]
+    assert [rule["provider_episode_start"] for rule in rules] == [1, 3, 1, 3]
+
+
+def test_metadata_search_accepts_twenty_results(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Example Show"
+    series.mkdir(parents=True)
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        client.app.state.container.bangumi.search = AsyncMock(return_value=[])
+        response = client.post(
+            f"/api/v1/media/{media_id}/metadata/search",
+            json={"provider": "bangumi", "query": "Example", "limit": 20},
+        )
+
+    assert response.status_code == 200
+    client.app.state.container.bangumi.search.assert_awaited_once_with("Example", limit=20)
 
 
 def test_bangumi_proxy_setting_persists_across_app_restart(tmp_path: Path) -> None:
@@ -199,6 +490,94 @@ def test_editable_settings_persist_without_returning_tokens(tmp_path: Path) -> N
     assert data["ffmpeg_available"] is True
     assert "bangumi-secret" not in persisted.text
     assert "tmdb-secret" not in persisted.text
+
+
+def test_media_root_change_rebinds_catalog_immediately_and_accepts_relative_path(
+    tmp_path: Path,
+) -> None:
+    allowed_root = tmp_path / "libraries"
+    original_root = allowed_root / "original"
+    selected_root = allowed_root / "selected"
+    (original_root / "Old Show").mkdir(parents=True)
+    (selected_root / "New Show").mkdir(parents=True)
+    settings = Settings(
+        media_root=original_root,
+        allowed_media_root=allowed_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        before = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        )
+        updated = client.put(
+            "/api/v1/settings",
+            json={"media_root": "selected"},
+        )
+        after = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        )
+
+    assert [item["title"] for item in before.json()["data"]] == ["Old Show"]
+    assert updated.status_code == 200
+    assert updated.json()["data"]["media_root"] == str(selected_root.resolve())
+    assert [item["title"] for item in after.json()["data"]] == ["New Show"]
+
+
+def test_media_root_change_accepts_an_exact_additional_allowed_root(tmp_path: Path) -> None:
+    original_root = tmp_path / "test-library"
+    selected_root = tmp_path / "download-library"
+    (original_root / "Old Show").mkdir(parents=True)
+    (selected_root / "Downloaded Show").mkdir(parents=True)
+    settings = Settings(
+        media_root=original_root,
+        allowed_media_root=original_root,
+        additional_allowed_media_roots=(selected_root,),
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        updated = client.put(
+            "/api/v1/settings",
+            json={"media_root": str(selected_root)},
+        )
+        media = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        )
+
+    assert updated.status_code == 200
+    assert updated.json()["data"]["allowed_media_roots"] == [
+        str(original_root.resolve()),
+        str(selected_root.resolve()),
+    ]
+    assert [item["title"] for item in media.json()["data"]] == ["Downloaded Show"]
+
+
+def test_invalid_stored_media_root_falls_back_to_startup_root(tmp_path: Path) -> None:
+    media_root = tmp_path / "media"
+    (media_root / "Available Show").mkdir(parents=True)
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        client.app.state.container.app_settings.set(
+            "media_root", str(tmp_path / "old-unmounted-library")
+        )
+    with TestClient(create_app(settings)) as restarted_client:
+        current = restarted_client.get("/api/v1/settings")
+        media = restarted_client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        )
+
+    assert current.status_code == 200
+    assert current.json()["data"]["media_root"] == str(media_root.resolve())
+    assert [item["title"] for item in media.json()["data"]] == ["Available Show"]
 
 
 def test_ignore_marker_settings_persist_and_apply_immediately(tmp_path: Path) -> None:
@@ -501,6 +880,150 @@ def test_tmdb_episode_metadata_api_returns_remote_stills(tmp_path: Path) -> None
     client.app.state.container.tmdb.get_episodes.assert_awaited_once_with("100", 2)
 
 
+def test_expensive_drawer_results_use_persistent_cache_until_manual_refresh(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Example Show"
+    series.mkdir(parents=True)
+    (series / "Example Show E01.mkv").write_bytes(b"video")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        detail = MetadataCandidate(
+            provider="bangumi",
+            external_id="12345",
+            title="示例动画",
+            original_title="Example Show",
+            year=2026,
+            episode_count=1,
+            image_url=None,
+            summary="缓存详情",
+        )
+        client.app.state.container.bangumi.get_subject = AsyncMock(return_value=detail)
+        detail_body = {"provider": "bangumi", "external_id": "12345"}
+        first_detail = client.post(
+            f"/api/v1/media/{media_id}/metadata/detail", json=detail_body
+        )
+        cached_detail = client.post(
+            f"/api/v1/media/{media_id}/metadata/detail", json=detail_body
+        )
+        refreshed_detail = client.post(
+            f"/api/v1/media/{media_id}/metadata/detail",
+            json={**detail_body, "refresh": True},
+        )
+        client.app.state.container.bangumi.search = AsyncMock(return_value=[detail])
+        search_body = {"provider": "bangumi", "query": "示例动画", "limit": 10}
+        first_search = client.post(
+            f"/api/v1/media/{media_id}/metadata/search", json=search_body
+        )
+        cached_search = client.post(
+            f"/api/v1/media/{media_id}/metadata/search", json=search_body
+        )
+        refreshed_search = client.post(
+            f"/api/v1/media/{media_id}/metadata/search",
+            json={**search_body, "refresh": True},
+        )
+        last_search = client.get(
+            f"/api/v1/media/{media_id}/metadata/search-cache",
+            params={"provider": "bangumi"},
+        )
+        episode = ProviderEpisode(
+            "episode-1", 1, "第一集", None, None, None, 24
+        )
+        client.app.state.container.bangumi.get_episodes = AsyncMock(
+            return_value=(episode,)
+        )
+        episode_body = {
+            "provider": "bangumi",
+            "external_id": "12345",
+            "season_number": 1,
+        }
+        first_episodes = client.post(
+            f"/api/v1/media/{media_id}/metadata/episodes", json=episode_body
+        )
+        cached_episodes = client.post(
+            f"/api/v1/media/{media_id}/metadata/episodes", json=episode_body
+        )
+        refreshed_episodes = client.post(
+            f"/api/v1/media/{media_id}/metadata/episodes",
+            json={**episode_body, "refresh": True},
+        )
+
+        original_preview = client.app.state.container.nfo_service.preview
+        client.app.state.container.nfo_service.preview = Mock(wraps=original_preview)
+        preview_body = {
+            "season_number": 1,
+            "bangumi_id": "12345",
+            "bangumi_episode_count": 1,
+        }
+        first_preview = client.post(
+            f"/api/v1/media/{media_id}/nfo-preview", json=preview_body
+        )
+        cached_preview = client.post(
+            f"/api/v1/media/{media_id}/nfo-preview", json=preview_body
+        )
+        refreshed_preview = client.post(
+            f"/api/v1/media/{media_id}/nfo-preview",
+            json={**preview_body, "refresh": True},
+        )
+
+        original_scrape_info = client.app.state.container.media_service.get_scrape_info
+        client.app.state.container.media_service.get_scrape_info = Mock(
+            wraps=original_scrape_info
+        )
+        first_scrape = client.get(f"/api/v1/media/{media_id}/scrape-info")
+        cached_scrape = client.get(f"/api/v1/media/{media_id}/scrape-info")
+        refreshed_scrape = client.get(
+            f"/api/v1/media/{media_id}/scrape-info", params={"refresh": "true"}
+        )
+
+    with TestClient(create_app(settings)) as restarted_client:
+        restarted_client.app.state.container.bangumi.get_subject = AsyncMock(
+            side_effect=AssertionError("persistent cache should avoid a provider request")
+        )
+        after_restart = restarted_client.post(
+            f"/api/v1/media/{media_id}/metadata/detail", json=detail_body
+        )
+
+    assert first_detail.status_code == 200
+    assert cached_detail.json()["data"] == first_detail.json()["data"]
+    assert refreshed_detail.status_code == 200
+    assert client.app.state.container.bangumi.get_subject.await_count == 2
+    assert first_search.status_code == 200
+    assert cached_search.json()["data"] == first_search.json()["data"]
+    assert refreshed_search.status_code == 200
+    assert client.app.state.container.bangumi.search.await_count == 2
+    assert last_search.json()["data"] == {
+        "query": "示例动画",
+        "limit": 10,
+        "candidates": first_search.json()["data"],
+    }
+    assert first_episodes.status_code == 200
+    assert cached_episodes.json()["data"] == first_episodes.json()["data"]
+    assert refreshed_episodes.status_code == 200
+    assert client.app.state.container.bangumi.get_episodes.await_count == 2
+    assert first_preview.status_code == 200
+    assert cached_preview.json()["data"] == first_preview.json()["data"]
+    assert refreshed_preview.status_code == 200
+    assert client.app.state.container.nfo_service.preview.call_count == 2
+    assert first_scrape.status_code == 200
+    assert cached_scrape.json()["data"] == first_scrape.json()["data"]
+    assert refreshed_scrape.status_code == 200
+    assert client.app.state.container.media_service.get_scrape_info.call_count == 2
+    assert after_restart.status_code == 200
+    assert after_restart.json()["data"] == first_detail.json()["data"]
+    restarted_client.app.state.container.bangumi.get_subject.assert_not_awaited()
+
+
 def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
     tmp_path: Path,
 ) -> None:
@@ -677,7 +1200,7 @@ def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
         "Season 1/Example Show S01E02.nfo",
     }
     assert update_result["locked_fields"] == ["series.title", "episodes.title"]
-    assert update_result["created_artwork_files"] == ["Season 1/Example Show S01E02-thumb.jpg"]
+    assert update_result["created_artwork_files"] == []
     assert ET.parse(series / "tvshow.nfo").getroot().findtext("title") == "我的自定义标题"
     assert ET.parse(existing_nfo).getroot().findtext("title") == "保留原内容"
     assert not extra_video.with_suffix(".nfo").exists()
@@ -687,6 +1210,8 @@ def test_nfo_generation_requires_confirmation_and_only_creates_missing_files(
     assert (
         first_video.with_name(f"{first_video.stem}-thumb.jpg").read_bytes() == b"generated-artwork"
     )
+    assert not second_video.with_name(f"{second_video.stem}-thumb.jpg").exists()
+    assert client.app.state.container.episode_artwork_generator.generate.await_count == 1
     series_root = ET.parse(series / "tvshow.nfo").getroot()
     assert series_root.findtext("uniqueid") == "12345"
     assert (
@@ -817,7 +1342,6 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
         "clearlogo.png",
         "Season 2/poster.jpg",
         "Season 2/Example Show S02E01-thumb.jpg",
-        "Season 2/Example Show S02E02-thumb.jpg",
     }
     assert result["artwork_warnings"] == [
         {
@@ -830,13 +1354,13 @@ def test_tmdb_nfo_generation_saves_series_season_and_episode_artwork(tmp_path: P
     assert (series / "clearlogo.png").read_bytes() == b"logo"
     assert (season / "poster.jpg").is_file()
     assert video.with_name(f"{video.stem}-thumb.jpg").is_file()
-    assert second_video.with_name(f"{second_video.stem}-thumb.jpg").read_bytes() == b"fallback"
+    assert not second_video.with_name(f"{second_video.stem}-thumb.jpg").exists()
     series_nfo = ET.parse(series / "tvshow.nfo").getroot()
     assert series_nfo.findtext("fanart/thumb").endswith("/backdrop.jpg")
     assert next(
         node.text for node in series_nfo.findall("thumb") if node.get("aspect") == "clearlogo"
     ).endswith("/logo.png")
-    client.app.state.container.episode_artwork_generator.generate.assert_awaited_once()
+    client.app.state.container.episode_artwork_generator.generate.assert_not_awaited()
 
 
 def test_single_file_theatrical_mapping_overrides_existing_episode_nfo(tmp_path: Path) -> None:
@@ -1000,3 +1524,230 @@ def test_regular_series_mapping_adjusts_emby_and_provider_episode_numbers(
     assert episode_root.findtext("episode") == "1"
     assert episode_root.findtext("title") == "第一集"
     client.app.state.container.bangumi.get_episodes.assert_awaited_once_with("12345", 1)
+
+
+def test_segmented_work_matching_uses_multiple_bangumi_subjects_and_sort_numbers(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Split Cour Show"
+    season = series / "Season 1"
+    second_season = series / "Season 2"
+    season.mkdir(parents=True)
+    second_season.mkdir()
+    specials = season / "SPs"
+    specials.mkdir()
+    manual_extras = season / "My Extras"
+    manual_extras.mkdir()
+    first_video = season / "Split Cour Show S01E01.mkv"
+    twelfth_video = season / "Split Cour Show S01E12.mkv"
+    unmapped_video = season / "Split Cour Show S01E24.mkv"
+    zero_video = second_season / "Split Cour Show E00.mkv"
+    nc_extra = specials / "Split Cour Show [01(NC Ver.)].mkv"
+    ova_extra = season / "Split Cour Show S01EOVA.mkv"
+    manually_excluded = manual_extras / "Split Cour Show S01E25.mkv"
+    first_video.write_bytes(b"episode-one")
+    twelfth_video.write_bytes(b"episode-twelve")
+    unmapped_video.write_bytes(b"episode-unmapped")
+    zero_video.write_bytes(b"episode-zero")
+    nc_extra.write_bytes(b"creditless-extra")
+    ova_extra.write_bytes(b"ova-extra")
+    manually_excluded.write_bytes(b"manual-extra")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+        episode_artwork_fallback_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        binding = {
+            "bangumi_id": "111",
+            "tmdb_id": None,
+            "preferred_title": "Split Cour Show",
+            "content_kind": "series",
+            "year": 2026,
+            "season_number": 1,
+            "episode_offset": 0,
+            "folder_template": "{title} ({year})/Season {season:02}",
+            "filename_template": "{title} S{season:02}E{episode:02}",
+            "emby_enabled": True,
+            "image_url": None,
+            "metadata": {
+                "primary_provider": "bangumi",
+                "nfo_episode_mapping_mode": "segments",
+            },
+            "provider_subjects": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "111",
+                    "title": "Split Cour Show",
+                    "role": "primary",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "222",
+                    "title": "Split Cour Show Part 2",
+                    "role": "season_part",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "333",
+                    "title": "Split Cour Show Season 2",
+                    "role": "season",
+                },
+            ],
+            "episode_source_rules": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "111",
+                    "local_season": 1,
+                    "local_episode_start": 1,
+                    "local_episode_end": 11,
+                    "provider_episode_start": 1,
+                    "provider_season": 1,
+                    "number_mode": "sort",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "222",
+                    "local_season": 1,
+                    "local_episode_start": 12,
+                    "local_episode_end": 23,
+                    "provider_episode_start": 12,
+                    "provider_season": 1,
+                    "number_mode": "sort",
+                },
+                {
+                    "provider": "bangumi",
+                    "external_id": "333",
+                    "local_season": 2,
+                    "local_episode_start": 0,
+                    "local_episode_end": 12,
+                    "provider_episode_start": 0,
+                    "provider_season": 2,
+                    "number_mode": "sort",
+                },
+            ],
+        }
+        saved = client.put(f"/api/v1/media/{media_id}/scrape-config", json=binding)
+        client.app.state.container.bangumi.get_subject = AsyncMock(
+            side_effect=lambda external_id: MetadataCandidate(
+                provider="bangumi",
+                external_id=external_id,
+                title={
+                    "111": "Split Cour Show",
+                    "222": "Split Cour Show Part 2",
+                    "333": "Split Cour Show Season 2",
+                }[external_id],
+                original_title=None,
+                year=2026,
+                episode_count=11 if external_id == "111" else 12,
+                image_url=None,
+                summary=None,
+            )
+        )
+
+        async def episodes_for(external_id: str, _season_number: int):
+            if external_id == "111":
+                return (
+                    ProviderEpisode(
+                        "episode-111-1",
+                        1,
+                        "First episode",
+                        None,
+                        None,
+                        None,
+                        24,
+                        subject_id="111",
+                        sort_number=1,
+                    ),
+                )
+            if external_id == "333":
+                return (
+                    ProviderEpisode(
+                        "episode-333-0",
+                        1,
+                        "Episode zero",
+                        None,
+                        None,
+                        None,
+                        24,
+                        subject_id="333",
+                        sort_number=0,
+                    ),
+                )
+            return (
+                ProviderEpisode(
+                    "episode-222-1",
+                    1,
+                    "Twelfth episode",
+                    None,
+                    None,
+                    None,
+                    24,
+                    subject_id="222",
+                    sort_number=12,
+                ),
+            )
+
+        client.app.state.container.bangumi.get_episodes = AsyncMock(side_effect=episodes_for)
+        client.app.state.container.media_probe.probe = AsyncMock(
+            return_value=MediaProbeResult(None)
+        )
+        blocked = client.post(
+            f"/api/v1/media/{media_id}/nfo-generate",
+            json={"confirmed": True, "overwrite_existing": True},
+        )
+        assert not (series / "tvshow.nfo").exists()
+        generated = client.post(
+            f"/api/v1/media/{media_id}/nfo-generate",
+            json={
+                "confirmed": True,
+                "overwrite_existing": True,
+                "excluded_paths": ["Season 1/Split Cour Show S01E24.nfo"],
+                "excluded_folders": ["Season 1/My Extras"],
+            },
+        )
+
+    assert saved.status_code == 200
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "EPISODE_SOURCE_MAPPING_INCOMPLETE"
+    assert blocked.json()["error"]["details"]["entries"] == [
+        {
+            "path": "Season 1/My Extras/Split Cour Show S01E25.nfo",
+            "reason": "EPISODE_SOURCE_NOT_MAPPED",
+            "local_season": 1,
+            "local_episode": 25,
+        },
+        {
+            "path": "Season 1/Split Cour Show S01E24.nfo",
+            "reason": "EPISODE_SOURCE_NOT_MAPPED",
+            "local_season": 1,
+            "local_episode": 24,
+        }
+    ]
+    assert generated.status_code == 200
+    first_root = ET.parse(first_video.with_suffix(".nfo")).getroot()
+    twelfth_root = ET.parse(twelfth_video.with_suffix(".nfo")).getroot()
+    zero_root = ET.parse(zero_video.with_suffix(".nfo")).getroot()
+    assert first_root.findtext("bangumiid") == "episode-111-1"
+    assert twelfth_root.findtext("bangumiid") == "episode-222-1"
+    assert twelfth_root.findtext("bangumiepisode/subjectid") == "222"
+    assert twelfth_root.findtext("episode") == "12"
+    assert zero_root.findtext("bangumiid") == "episode-333-0"
+    assert zero_root.findtext("season") == "2"
+    assert zero_root.findtext("episode") == "0"
+    assert not nc_extra.with_suffix(".nfo").exists()
+    assert not ova_extra.with_suffix(".nfo").exists()
+    assert not manually_excluded.with_suffix(".nfo").exists()
+    series_root = ET.parse(series / "tvshow.nfo").getroot()
+    source_ids = [
+        source.attrib["id"]
+        for source in series_root.findall("cymediaflow/sources/source")
+    ]
+    assert source_ids == ["111", "222", "333"]

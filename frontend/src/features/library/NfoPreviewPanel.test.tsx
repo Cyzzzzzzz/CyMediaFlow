@@ -35,9 +35,9 @@ const preview: NfoPreview = {
 describe("NfoPreviewPanel", () => {
   it("keeps video names read-only and supports folder controls", () => {
     const onSelectionChange = vi.fn();
-    render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
+    render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
 
-    expect(screen.getByText("视频文件名保持不变，仅处理同目录 sidecar")).toBeTruthy();
+    expect(screen.getByText("优先显示上次分析缓存；视频文件名保持不变")).toBeTruthy();
     expect(screen.getByText((content) => content.includes("对应视频：[Group][Show][01].mkv"))).toBeTruthy();
     expect(screen.getByText("[Group][Show][01].nfo")).toBeTruthy();
     const checkbox = screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" });
@@ -48,7 +48,7 @@ describe("NfoPreviewPanel", () => {
     expect(folderToggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(folderToggle);
     fireEvent.click(screen.getByRole("button", { name: "取消本文件夹" }));
-    expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], []);
+    expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], [], []);
   });
 
   it("allows an existing sidecar to be selected for managed update", () => {
@@ -66,11 +66,46 @@ describe("NfoPreviewPanel", () => {
         action: "unchanged" as const,
       }],
     };
-    render(<NfoPreviewPanel preview={existing} loading={false} error={false} excludedPaths={[]} includedPaths={[]} onSelectionChange={vi.fn()} onRefresh={vi.fn()} />);
+    render(<NfoPreviewPanel preview={existing} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} includedPaths={[]} onSelectionChange={vi.fn()} onRefresh={vi.fn()} />);
 
     const checkbox = screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" });
     expect((checkbox as HTMLInputElement).disabled).toBe(false);
     expect((checkbox as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText("待更新")).toBeTruthy();
+  });
+
+  it("records an explicit skip for an unmapped segmented episode", () => {
+    const onSelectionChange = vi.fn();
+    const unmapped = {
+      ...preview,
+      total: 1,
+      create_count: 1,
+      review_count: 0,
+      default_selected_count: 0,
+      default_skipped_count: 1,
+      entries: [{
+        ...preview.entries[0],
+        default_selected: false,
+        selection_reason: "EPISODE_SOURCE_NOT_MAPPED",
+        warnings: ["EPISODE_SOURCE_NOT_MAPPED"],
+      }],
+    };
+    render(<NfoPreviewPanel preview={unmapped} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "跳过此文件" }));
+    expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], [], []);
+  });
+
+  it("persists a manual folder exclusion even when the folder contains skipped extras", () => {
+    const onSelectionChange = vi.fn();
+    const { rerender } = render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "排除文件夹" }));
+
+    expect(onSelectionChange).toHaveBeenLastCalledWith([], [], ["raw"]);
+    rerender(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={["raw"]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
+    expect((screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" }) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getAllByText("已手动排除文件夹")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "取消排除" })).toBeTruthy();
   });
 });

@@ -12,6 +12,7 @@ from app.api.response import ok
 from app.api.schemas import BangumiProxyUpdate, SettingsUpdate, SettingsView
 from app.container import build_container
 from app.core.errors import DomainError
+from app.core.path_safety import path_is_within
 
 router = APIRouter(tags=["system"])
 
@@ -43,7 +44,7 @@ def update_bangumi_proxy(
 @router.put("/settings")
 def update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]:
     container = get_container(request)
-    media_root = _validated_media_root(body.media_root, container.settings.allowed_media_root)
+    media_root = _validated_media_root(body.media_root, container.settings.allowed_media_roots)
     values = {
         "media_root": str(media_root),
         "bangumi_proxy_url": (
@@ -91,6 +92,7 @@ def _settings_view(container) -> SettingsView:
     return SettingsView(
         media_root=str(root),
         allowed_media_root=str(container.settings.allowed_media_root),
+        allowed_media_roots=[str(value) for value in container.settings.allowed_media_roots],
         media_root_exists=root.is_dir(),
         media_root_readable=root.is_dir() and os.access(root, os.R_OK),
         bangumi_configured=container.bangumi.configured,
@@ -121,18 +123,28 @@ def _executable_available(executable: str) -> bool:
     return shutil.which(executable) is not None
 
 
-def _validated_media_root(value: str, allowed_root: Path) -> Path:
-    candidate = Path(value).expanduser().resolve(strict=False)
-    allowed = allowed_root.resolve(strict=False)
-    try:
-        candidate.relative_to(allowed)
-    except ValueError as exc:
+def _validated_media_root(value: str, allowed_root: Path | tuple[Path, ...]) -> Path:
+    requested = Path(value.strip()).expanduser()
+    allowed_roots = allowed_root if isinstance(allowed_root, tuple) else (allowed_root,)
+    allowed = tuple(root.resolve(strict=False) for root in allowed_roots)
+    relative_base = allowed[0]
+    candidate = (
+        requested if requested.is_absolute() else relative_base / requested
+    ).resolve(strict=False)
+    if not any(path_is_within(candidate, root) for root in allowed):
         raise DomainError(
             code="MEDIA_ROOT_OUTSIDE_ALLOWED_ROOT",
-            message="媒体目录必须位于允许的媒体根目录内",
+            message=(
+                "媒体目录必须位于允许范围内；Docker/NAS 请填写容器路径，"
+                "通常为 /media 或其子目录"
+            ),
             status_code=400,
-            details={"allowed_media_root": str(allowed)},
-        ) from exc
+            details={
+                "requested_media_root": value,
+                "resolved_media_root": str(candidate),
+                "allowed_media_roots": [str(root) for root in allowed],
+            },
+        )
     if not candidate.is_dir() or not os.access(candidate, os.R_OK):
         raise DomainError(
             code="MEDIA_ROOT_NOT_READABLE",

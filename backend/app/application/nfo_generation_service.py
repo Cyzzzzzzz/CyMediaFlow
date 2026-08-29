@@ -23,8 +23,13 @@ from app.application.ports import (
 )
 from app.core.errors import MediaNotFoundError, NfoGenerationError
 from app.domain.artwork import IMAGE_EXTENSIONS, ArtworkGenerationResult
-from app.domain.episode_mapping import resolve_episode_mapping
-from app.domain.media import MetadataCandidate, ProviderPerson
+from app.domain.episode_mapping import resolve_episode_mapping, resolve_local_season
+from app.domain.media import (
+    EpisodeSourceRule,
+    MetadataCandidate,
+    ProviderEpisode,
+    ProviderPerson,
+)
 from app.domain.nfo import NfoGenerationResult, NfoGenerationSkip, NfoPreviewEntry
 
 
@@ -36,6 +41,15 @@ class _RemoteArtworkRequest:
     relative_hint: str
     fallback_video: Path | None = None
     fallback_duration: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedSource:
+    provider: str
+    external_id: str
+    provider_season: int
+    subject: MetadataCandidate
+    episodes: tuple[ProviderEpisode, ...]
 
 
 class NfoGenerationService:
@@ -82,6 +96,7 @@ class NfoGenerationService:
         provider_episode_number: int | None = None,
         local_episode_offset: int | None = None,
         excluded_paths: tuple[str, ...] = (),
+        excluded_folders: tuple[str, ...] = (),
         included_paths: tuple[str, ...] = (),
         overwrite_existing: bool = False,
         locked_fields: tuple[str, ...] = (),
@@ -130,9 +145,6 @@ class NfoGenerationService:
                 configured_provider_season, bool
             ):
                 provider_season = configured_provider_season
-        subject = await metadata_provider.get_subject(effective_external_id)
-        episodes = await metadata_provider.get_episodes(effective_external_id, provider_season)
-        episode_by_number = {episode.episode_number: episode for episode in episodes}
         offset = (
             episode_offset
             if episode_offset is not None
@@ -145,6 +157,52 @@ class NfoGenerationService:
             local_episode_offset=local_episode_offset,
             metadata=binding.metadata if binding else None,
         )
+        primary_source = await self._load_source(
+            selected_provider, effective_external_id, provider_season
+        )
+        subject = primary_source.subject
+        episodes = primary_source.episodes
+        source_cache = {
+            self._source_key(selected_provider, effective_external_id, provider_season): (
+                primary_source
+            )
+        }
+        source_rules = binding.episode_source_rules if binding else ()
+        if mapping.uses_source_rules:
+            if not source_rules:
+                raise NfoGenerationError(
+                    "EPISODE_SOURCE_RULES_REQUIRED",
+                    "多条目分段模式至少需要一条季度/分集来源规则",
+                )
+            requested_sources = {
+                self._source_key(rule.provider, rule.external_id, rule.provider_season)
+                for rule in source_rules
+            }
+            missing_sources = [
+                source_key
+                for source_key in requested_sources
+                if source_key not in source_cache
+            ]
+            loaded_sources = await asyncio.gather(
+                *(self._load_source(*source_key) for source_key in missing_sources)
+            )
+            source_cache.update(
+                {
+                    self._source_key(
+                        loaded.provider, loaded.external_id, loaded.provider_season
+                    ): loaded
+                    for loaded in loaded_sources
+                }
+            )
+        episode_by_number = {episode.episode_number: episode for episode in episodes}
+        excluded = {self._normalize_relative(path) for path in excluded_paths}
+        configured_excluded_folders = excluded_folders or self._metadata_string_tuple(
+            binding.metadata.get("nfo_excluded_folders") if binding else None
+        )
+        excluded_folder_set = {
+            self._normalize_folder(folder) for folder in configured_excluded_folders
+        }
+        included = {self._normalize_relative(path) for path in included_paths}
         preview = self._preview_service.preview(
             media_id,
             season_number=configured_season,
@@ -155,17 +213,30 @@ class NfoGenerationService:
             local_episode_offset=mapping.local_episode_offset,
             overwrite_existing=overwrite_existing,
             bangumi_id=effective_external_id,
-            bangumi_episode_count=len(episodes),
+            bangumi_episode_count=(None if mapping.uses_source_rules else len(episodes)),
+            excluded_folders=configured_excluded_folders,
         )
-        regular_entries = [entry for entry in preview.entries if entry.category == "regular"]
+        regular_entries = [
+            entry
+            for entry in preview.entries
+            if entry.category == "regular"
+            and not self._folder_is_excluded(entry.folder, excluded_folder_set)
+        ]
         if mapping.is_single and len(regular_entries) != 1:
             raise NfoGenerationError(
                 "SINGLE_EPISODE_MAPPING_REQUIRES_ONE_VIDEO",
                 "单文件剧场版/特别篇映射要求目录内恰好有一个常规视频文件",
                 {"regular_video_count": len(regular_entries)},
             )
-        excluded = {self._normalize_relative(path) for path in excluded_paths}
-        included = {self._normalize_relative(path) for path in included_paths}
+        if mapping.uses_source_rules:
+            self._validate_segment_sources(
+                regular_entries,
+                excluded,
+                excluded_folder_set,
+                source_rules,
+                source_cache,
+                configured_season,
+            )
         locks = tuple(dict.fromkeys(locked_fields))
         values = manual_values or {}
         documents: dict[Path, str] = {}
@@ -219,14 +290,19 @@ class NfoGenerationService:
             skipped,
             series_target,
             "tvshow.nfo",
-            self._documents.series(subject, episodes),
+            self._documents.series(
+                subject,
+                episodes,
+                binding.provider_subjects if binding else (),
+            ),
             level="series",
             overwrite_existing=overwrite_existing,
             locked_fields=locks,
             manual_values=values,
         )
 
-        season_directories: set[Path] = set()
+        season_directories: dict[Path, int] = {}
+        season_sources: dict[int, list[_LoadedSource]] = {}
         for entry in preview.entries:
             if entry.category != "regular" or (
                 not mapping.is_single
@@ -234,8 +310,16 @@ class NfoGenerationService:
                 and entry.parsed.absolute_episode_start is None
             ):
                 continue
-            season_directories.add(self._safe_target(item.root_path, entry.folder))
-            if not self._selected(entry, excluded, included, overwrite_existing):
+            local_season = configured_season
+            if mapping.uses_source_rules:
+                local_season = resolve_local_season(
+                    entry.video_relative_path,
+                    entry.parsed.season,
+                    configured_season,
+                )
+            if not self._selected(
+                entry, excluded, excluded_folder_set, included, overwrite_existing
+            ):
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_SELECTED"))
                 continue
             if entry.action != "create" and not (
@@ -243,11 +327,36 @@ class NfoGenerationService:
             ):
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_UPDATEABLE"))
                 continue
-            parsed_episode = entry.parsed.episode_start or entry.parsed.absolute_episode_start or 0
-            mapped_number = (
-                mapping.provider_episode_number if mapping.is_single else parsed_episode + offset
-            )
-            provider_episode = episode_by_number.get(mapped_number)
+            parsed_episode = self._parsed_episode(entry)
+            loaded_source = primary_source
+            if mapping.uses_source_rules:
+                source_rule = self._matching_source_rule(
+                    source_rules, local_season, parsed_episode
+                )
+                if source_rule is None:
+                    skipped.append(
+                        NfoGenerationSkip(
+                            entry.target_nfo_relative_path, "EPISODE_SOURCE_NOT_MAPPED"
+                        )
+                    )
+                    continue
+                source_key = self._source_key(
+                    source_rule.provider,
+                    source_rule.external_id,
+                    source_rule.provider_season,
+                )
+                loaded_source = source_cache[source_key]
+                mapped_number = source_rule.provider_episode_number(parsed_episode)
+                provider_episode = self._find_provider_episode(
+                    loaded_source.episodes, mapped_number, source_rule.number_mode
+                )
+            else:
+                mapped_number = (
+                    mapping.provider_episode_number
+                    if mapping.is_single
+                    else parsed_episode + offset
+                )
+                provider_episode = episode_by_number.get(mapped_number)
             if provider_episode is None:
                 skipped.append(
                     NfoGenerationSkip(entry.target_nfo_relative_path, "PROVIDER_EPISODE_NOT_FOUND")
@@ -261,14 +370,21 @@ class NfoGenerationService:
                 else parsed_episode
                 + (mapping.local_episode_offset if mapping.adjusts_local_episode else 0)
             )
-            if effective_local_episode < 1:
+            if effective_local_episode < 0:
                 skipped.append(
                     NfoGenerationSkip(
                         entry.target_nfo_relative_path, "INVALID_LOCAL_EPISODE_NUMBER"
                     )
                 )
                 continue
-            episode_scope = f"{configured_season}:{effective_local_episode}"
+            effective_local_season = configured_season if mapping.is_single else local_season
+            episode_scope = f"{effective_local_season}:{effective_local_episode}"
+            season_directories[
+                self._safe_target(item.root_path, entry.folder)
+            ] = effective_local_season
+            season_sources.setdefault(effective_local_season, [])
+            if loaded_source not in season_sources[effective_local_season]:
+                season_sources[effective_local_season].append(loaded_source)
             media = None
             if not self._merger.field_locked(
                 "episodes.media_streams", locks, episode_scope
@@ -282,7 +398,9 @@ class NfoGenerationService:
             artwork_locked = self._merger.field_locked(
                 "episodes.artwork", locks, episode_scope
             )
-            if not artwork_locked and not self._episode_artwork_exists(video_target):
+            if not artwork_locked and not self._episode_artwork_exists(
+                video_target, target, item.root_path
+            ):
                 episode_image_url = provider_episode.image_url or self._nfo_artwork_urls(
                     target
                 ).get("thumb")
@@ -296,12 +414,16 @@ class NfoGenerationService:
                         video_target.parent,
                         f"{video_target.stem}-thumb",
                         relative_hint,
-                        fallback_video=(
-                            video_target if self._episode_artwork_fallback_enabled else None
-                        ),
-                        fallback_duration=media.duration_seconds if media else None,
                     )
-                elif self._episode_artwork_fallback_enabled:
+                elif (
+                    self._episode_artwork_fallback_enabled
+                    and not self._fallback_preview_exists(
+                        item.root_path,
+                        video_target.parent,
+                        effective_local_season,
+                        item.poster_path,
+                    )
+                ):
                     artwork_target = video_target.with_name(f"{video_target.stem}-thumb.jpg")
                     artwork_requests.append(
                         (video_target, artwork_target, media.duration_seconds if media else None)
@@ -312,7 +434,10 @@ class NfoGenerationService:
                 target,
                 entry.target_nfo_relative_path,
                 self._documents.episode(
-                    provider_episode, configured_season, effective_local_episode, media
+                    provider_episode,
+                    effective_local_season,
+                    effective_local_episode,
+                    media,
                 ),
                 level="episode",
                 overwrite_existing=overwrite_existing,
@@ -320,23 +445,31 @@ class NfoGenerationService:
                 manual_values=values,
             )
 
-        for directory in season_directories:
+        for directory, local_season in season_directories.items():
             season_target = self._safe_child(item.root_path, directory, "season.nfo")
             relative = season_target.relative_to(item.root_path).as_posix()
-            season_scope = str(configured_season)
+            season_scope = str(local_season)
+            sources_for_season = season_sources.get(local_season) or [primary_source]
+            season_source = sources_for_season[0]
+            season_subject = season_source.subject
+            season_episodes = tuple(
+                episode
+                for source in sources_for_season
+                for episode in source.episodes
+            )
             if not self._merger.field_locked("season.artwork", locks, season_scope):
                 season_image_url = next(
                     (
                         episode.season_image_url
-                        for episode in episodes
+                        for episode in season_episodes
                         if episode.season_image_url
                     ),
                     None,
-                ) or self._nfo_artwork_urls(season_target).get("poster") or subject.image_url
+                ) or self._nfo_artwork_urls(season_target).get("poster") or season_subject.image_url
                 season_stem = (
                     "poster"
                     if directory.resolve(strict=False) != item.root_path.resolve(strict=False)
-                    else f"season{configured_season:02}-poster"
+                    else f"season{local_season:02}-poster"
                 )
                 self._queue_remote_artwork(
                     remote_artwork_requests,
@@ -350,7 +483,20 @@ class NfoGenerationService:
                 skipped,
                 season_target,
                 relative,
-                self._documents.season(subject, episodes, configured_season),
+                self._documents.season(
+                    season_subject,
+                    season_episodes,
+                    local_season,
+                    tuple(
+                        subject_binding
+                        for subject_binding in (binding.provider_subjects if binding else ())
+                        if any(
+                            source.provider == subject_binding.provider
+                            and source.external_id == subject_binding.external_id
+                            for source in sources_for_season
+                        )
+                    ),
+                ),
                 level="season",
                 overwrite_existing=overwrite_existing,
                 locked_fields=locks,
@@ -419,6 +565,138 @@ class NfoGenerationService:
         if provider == "tmdb":
             return tmdb_id or (binding.tmdb_id if binding else None)
         return bangumi_id or (binding.bangumi_id if binding else None)
+
+    @staticmethod
+    def _source_key(provider: str, external_id: str, provider_season: int) -> tuple[str, str, int]:
+        return provider, external_id, provider_season
+
+    async def _load_source(
+        self, provider: str, external_id: str, provider_season: int
+    ) -> _LoadedSource:
+        metadata_provider = self._providers.get(provider)
+        if metadata_provider is None:
+            raise NfoGenerationError(
+                "METADATA_PROVIDER_NOT_SUPPORTED",
+                f"不支持的元数据来源：{provider}",
+            )
+        subject, episodes = await asyncio.gather(
+            metadata_provider.get_subject(external_id),
+            metadata_provider.get_episodes(external_id, provider_season),
+        )
+        return _LoadedSource(provider, external_id, provider_season, subject, episodes)
+
+    @staticmethod
+    def _matching_source_rule(
+        rules: tuple[EpisodeSourceRule, ...], local_season: int, local_episode: int
+    ) -> EpisodeSourceRule | None:
+        return next(
+            (
+                rule
+                for rule in rules
+                if rule.contains(local_season, local_episode)
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _find_provider_episode(
+        episodes: tuple[ProviderEpisode, ...], number: int, number_mode: str
+    ) -> ProviderEpisode | None:
+        if number_mode == "sort":
+            return next(
+                (
+                    episode
+                    for episode in episodes
+                    if episode.sort_number is not None
+                    and abs(episode.sort_number - number) < 0.0001
+                ),
+                None,
+            )
+        return next(
+            (episode for episode in episodes if episode.episode_number == number),
+            None,
+        )
+
+    def _validate_segment_sources(
+        self,
+        entries: list[NfoPreviewEntry],
+        excluded: set[str],
+        excluded_folders: set[str],
+        rules: tuple[EpisodeSourceRule, ...],
+        source_cache: dict[tuple[str, str, int], _LoadedSource],
+        configured_season: int,
+    ) -> None:
+        problems: list[dict[str, object]] = []
+        for entry in entries:
+            relative_path = entry.target_nfo_relative_path
+            if self._normalize_relative(relative_path) in excluded:
+                continue
+            if self._folder_is_excluded(entry.folder, excluded_folders):
+                continue
+            parsed_episode = (
+                entry.parsed.episode_start
+                if entry.parsed.episode_start is not None
+                else entry.parsed.absolute_episode_start
+            )
+            if parsed_episode is None:
+                problems.append(
+                    {"path": relative_path, "reason": "LOCAL_EPISODE_NOT_RECOGNIZED"}
+                )
+                continue
+            local_season = resolve_local_season(
+                entry.video_relative_path,
+                entry.parsed.season,
+                configured_season,
+            )
+            source_rule = self._matching_source_rule(rules, local_season, parsed_episode)
+            if source_rule is None:
+                problems.append(
+                    {
+                        "path": relative_path,
+                        "reason": "EPISODE_SOURCE_NOT_MAPPED",
+                        "local_season": local_season,
+                        "local_episode": parsed_episode,
+                    }
+                )
+                continue
+            source_key = self._source_key(
+                source_rule.provider,
+                source_rule.external_id,
+                source_rule.provider_season,
+            )
+            loaded_source = source_cache[source_key]
+            provider_number = source_rule.provider_episode_number(parsed_episode)
+            if self._find_provider_episode(
+                loaded_source.episodes,
+                provider_number,
+                source_rule.number_mode,
+            ) is None:
+                problems.append(
+                    {
+                        "path": relative_path,
+                        "reason": "PROVIDER_EPISODE_NOT_FOUND",
+                        "local_season": local_season,
+                        "local_episode": parsed_episode,
+                        "provider": source_rule.provider,
+                        "external_id": source_rule.external_id,
+                        "provider_episode": provider_number,
+                        "number_mode": source_rule.number_mode,
+                    }
+                )
+        if problems:
+            raise NfoGenerationError(
+                "EPISODE_SOURCE_MAPPING_INCOMPLETE",
+                "分段映射仍有正片未匹配；请补充规则或在 NFO 预览中明确跳过后再生成",
+                {"entries": problems},
+            )
+
+    @staticmethod
+    def _parsed_episode(entry: NfoPreviewEntry) -> int:
+        if entry.parsed.episode_start is not None:
+            return entry.parsed.episode_start
+        if entry.parsed.absolute_episode_start is not None:
+            return entry.parsed.absolute_episode_start
+        return 0
 
     async def _generate_artwork(
         self,
@@ -656,13 +934,65 @@ class NfoGenerationService:
     def _artwork_stem_exists(directory: Path, stem: str) -> bool:
         return any((directory / f"{stem}{extension}").is_file() for extension in IMAGE_EXTENSIONS)
 
-    @staticmethod
-    def _episode_artwork_exists(video_path: Path) -> bool:
-        return any(
+    @classmethod
+    def _episode_artwork_exists(
+        cls,
+        video_path: Path,
+        nfo_path: Path | None = None,
+        media_root: Path | None = None,
+    ) -> bool:
+        if any(
             video_path.with_name(f"{video_path.stem}{suffix}{extension}").is_file()
             for suffix in ("-thumb", ".thumb", "-poster", "")
             for extension in IMAGE_EXTENSIONS
+        ):
+            return True
+        if nfo_path is None or media_root is None or not nfo_path.is_file():
+            return False
+        try:
+            root = ET.fromstring(nfo_path.read_bytes())
+        except (ET.ParseError, OSError):
+            return False
+        resolved_media_root = media_root.resolve(strict=False)
+        for node in root.findall("thumb"):
+            value = (node.text or "").strip()
+            if not value or "://" in value:
+                continue
+            reference = Path(value.replace("\\", "/"))
+            candidates = (
+                (reference,)
+                if reference.is_absolute()
+                else (nfo_path.parent / reference, resolved_media_root / reference)
+            )
+            for candidate in candidates:
+                resolved = candidate.resolve(strict=False)
+                try:
+                    resolved.relative_to(resolved_media_root)
+                except ValueError:
+                    continue
+                if resolved.suffix.casefold() in IMAGE_EXTENSIONS and resolved.is_file():
+                    return True
+        return False
+
+    @classmethod
+    def _fallback_preview_exists(
+        cls,
+        media_root: Path,
+        episode_directory: Path,
+        season_number: int,
+        series_poster: Path | None,
+    ) -> bool:
+        if series_poster is not None and series_poster.is_file():
+            return True
+        candidates = (
+            (episode_directory, f"season{season_number:02}-poster"),
+            (episode_directory, "season-poster"),
+            (episode_directory, "poster"),
+            (episode_directory, "folder"),
+            (media_root, f"season{season_number:02}-poster"),
+            (media_root, f"season{season_number}-poster"),
         )
+        return any(cls._artwork_stem_exists(directory, stem) for directory, stem in candidates)
 
     @staticmethod
     def _nfo_artwork_urls(nfo_path: Path) -> dict[str, str]:
@@ -726,9 +1056,15 @@ class NfoGenerationService:
 
     @staticmethod
     def _selected(
-        entry: NfoPreviewEntry, excluded: set[str], included: set[str], overwrite_existing: bool
+        entry: NfoPreviewEntry,
+        excluded: set[str],
+        excluded_folders: set[str],
+        included: set[str],
+        overwrite_existing: bool,
     ) -> bool:
         target = NfoGenerationService._normalize_relative(entry.target_nfo_relative_path)
+        if NfoGenerationService._folder_is_excluded(entry.folder, excluded_folders):
+            return False
         if target in included:
             return True
         if target in excluded:
@@ -738,6 +1074,27 @@ class NfoGenerationService:
     @staticmethod
     def _normalize_relative(value: str) -> str:
         return Path(value.replace("\\", "/")).as_posix().casefold()
+
+    @staticmethod
+    def _metadata_string_tuple(value: object) -> tuple[str, ...]:
+        if not isinstance(value, list):
+            return ()
+        return tuple(item for item in value if isinstance(item, str))
+
+    @staticmethod
+    def _normalize_folder(value: str) -> str:
+        normalized = Path(value.replace("\\", "/")).as_posix().strip("/").casefold()
+        return normalized or "."
+
+    @classmethod
+    def _folder_is_excluded(cls, folder: str, excluded_folders: set[str]) -> bool:
+        normalized = cls._normalize_folder(folder)
+        return any(
+            excluded == "."
+            or normalized == excluded
+            or normalized.startswith(f"{excluded}/")
+            for excluded in excluded_folders
+        )
 
     @staticmethod
     def _safe_target(root: Path, relative_path: str) -> Path:

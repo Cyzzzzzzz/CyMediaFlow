@@ -7,14 +7,18 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
+    get_episode_mapping_suggestion_service,
     get_media_service,
     get_naming_service,
     get_nfo_generation_service,
     get_nfo_service,
     get_provider_artwork_cache,
+    get_result_cache,
 )
 from app.api.response import ok
 from app.api.schemas import (
+    EpisodeMappingSuggestionRequest,
+    EpisodeMappingSuggestionView,
     LocalScrapeInfoView,
     MediaItemView,
     MetadataCandidateView,
@@ -30,11 +34,15 @@ from app.api.schemas import (
     ProviderEpisodeView,
     ScrapeBindingView,
 )
+from app.application.episode_mapping_suggestion_service import (
+    EpisodeMappingSuggestionService,
+)
 from app.application.media_service import MediaLibraryService
 from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
 router = APIRouter(prefix="/media", tags=["media"])
 
@@ -83,9 +91,17 @@ def get_scrape_info(
     media_id: str,
     request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+    refresh: bool = False,
 ) -> dict[str, object]:
+    if not refresh:
+        cached = cache.get(media_id, "scrape-info")
+        if cached is not None:
+            return ok(request, cached)
     info = service.get_scrape_info(media_id)
-    return ok(request, LocalScrapeInfoView.from_domain(info).model_dump(mode="json"))
+    payload = LocalScrapeInfoView.from_domain(info).model_dump(mode="json")
+    cache.put(media_id, "scrape-info", payload)
+    return ok(request, payload)
 
 
 @router.get("/{media_id}/artwork/series", response_class=FileResponse)
@@ -144,15 +160,37 @@ async def search_metadata(
     body: MetadataSearchRequest,
     request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
-    candidates = await service.search_metadata(media_id, body.query, body.provider)
-    return ok(
-        request,
-        [
-            MetadataCandidateView.from_domain(candidate).model_dump(mode="json")
-            for candidate in candidates
-        ],
+    parameters = body.model_dump(mode="json", exclude={"refresh"})
+    if not body.refresh:
+        cached = cache.get(media_id, "metadata-search", parameters)
+        if cached is not None:
+            return ok(request, cached)
+    candidates = await service.search_metadata(
+        media_id, body.query, body.provider, body.limit
     )
+    payload = [
+        MetadataCandidateView.from_domain(candidate).model_dump(mode="json")
+        for candidate in candidates
+    ]
+    cache.put(media_id, "metadata-search", payload, parameters)
+    cache.put(
+        media_id,
+        f"metadata-search-last:{body.provider}",
+        {"query": body.query or "", "limit": body.limit, "candidates": payload},
+    )
+    return ok(request, payload)
+
+
+@router.get("/{media_id}/metadata/search-cache")
+def get_cached_metadata_search(
+    media_id: str,
+    request: Request,
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+    provider: Literal["bangumi", "tmdb"] = "bangumi",
+) -> dict[str, object]:
+    return ok(request, cache.get(media_id, f"metadata-search-last:{provider}"))
 
 
 @router.post("/{media_id}/metadata/detail")
@@ -161,9 +199,17 @@ async def get_metadata_detail(
     body: MetadataDetailRequest,
     request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
+    parameters = body.model_dump(mode="json", exclude={"refresh"})
+    if not body.refresh:
+        cached = cache.get(media_id, "metadata-detail", parameters)
+        if cached is not None:
+            return ok(request, cached)
     detail = await service.get_metadata_detail(media_id, body.external_id, body.provider)
-    return ok(request, MetadataCandidateView.from_domain(detail).model_dump(mode="json"))
+    payload = MetadataCandidateView.from_domain(detail).model_dump(mode="json")
+    cache.put(media_id, "metadata-detail", payload, parameters)
+    return ok(request, payload)
 
 
 @router.post("/{media_id}/metadata/episodes")
@@ -172,16 +218,45 @@ async def get_metadata_episodes(
     body: MetadataEpisodesRequest,
     request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
+    parameters = body.model_dump(mode="json", exclude={"refresh"})
+    if not body.refresh:
+        cached = cache.get(media_id, "metadata-episodes", parameters)
+        if cached is not None:
+            return ok(request, cached)
     episodes = await service.get_metadata_episodes(
         media_id,
         body.external_id,
         body.provider,
         body.season_number,
     )
+    payload = [
+        ProviderEpisodeView.from_domain(episode).model_dump(mode="json")
+        for episode in episodes
+    ]
+    cache.put(media_id, "metadata-episodes", payload, parameters)
+    return ok(request, payload)
+
+
+@router.post("/{media_id}/episode-mapping/suggest")
+async def suggest_episode_mapping(
+    media_id: str,
+    body: EpisodeMappingSuggestionRequest,
+    request: Request,
+    service: Annotated[
+        EpisodeMappingSuggestionService,
+        Depends(get_episode_mapping_suggestion_service),
+    ],
+) -> dict[str, object]:
+    suggestion = await service.suggest(
+        media_id,
+        tuple(subject.to_domain() for subject in body.provider_subjects),
+        body.default_season,
+    )
     return ok(
         request,
-        [ProviderEpisodeView.from_domain(episode).model_dump(mode="json") for episode in episodes],
+        EpisodeMappingSuggestionView.from_domain(suggestion).model_dump(mode="json"),
     )
 
 
@@ -221,7 +296,13 @@ def preview_nfo(
     body: NfoPreviewRequest,
     request: Request,
     service: Annotated[NfoPreviewService, Depends(get_nfo_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
+    parameters = body.model_dump(mode="json", exclude={"refresh"})
+    if not body.refresh:
+        cached = cache.get(media_id, "nfo-preview", parameters)
+        if cached is not None:
+            return ok(request, cached)
     preview = service.preview(
         media_id,
         season_number=body.season_number,
@@ -233,8 +314,16 @@ def preview_nfo(
         overwrite_existing=body.overwrite_existing,
         bangumi_id=body.bangumi_id,
         bangumi_episode_count=body.bangumi_episode_count,
+        episode_source_rules=(
+            tuple(rule.to_domain() for rule in body.episode_source_rules)
+            if body.episode_source_rules is not None
+            else None
+        ),
+        excluded_folders=body.excluded_folders,
     )
-    return ok(request, NfoPreviewView.from_domain(preview).model_dump(mode="json"))
+    payload = NfoPreviewView.from_domain(preview).model_dump(mode="json")
+    cache.put(media_id, "nfo-preview", payload, parameters)
+    return ok(request, payload)
 
 
 @router.post("/{media_id}/nfo-generate")
@@ -243,6 +332,7 @@ async def generate_nfo(
     body: NfoGenerationRequest,
     request: Request,
     service: Annotated[NfoGenerationService, Depends(get_nfo_generation_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
     result = await service.generate(
         media_id,
@@ -257,9 +347,11 @@ async def generate_nfo(
         provider_episode_number=body.provider_episode_number,
         local_episode_offset=body.local_episode_offset,
         excluded_paths=body.excluded_paths,
+        excluded_folders=body.excluded_folders,
         included_paths=body.included_paths,
         overwrite_existing=body.overwrite_existing,
         locked_fields=body.locked_fields,
         manual_values=body.manual_values,
     )
+    cache.delete(media_id, ("scrape-info", "nfo-preview"))
     return ok(request, NfoGenerationResultView.from_domain(result).model_dump(mode="json"))
