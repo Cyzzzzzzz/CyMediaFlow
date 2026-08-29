@@ -15,6 +15,7 @@ from app.api.dependencies import (
     get_nfo_service,
     get_provider_artwork_cache,
     get_result_cache,
+    get_scheduled_refresh_service,
     get_season_artwork_service,
 )
 from app.api.response import ok
@@ -34,6 +35,7 @@ from app.api.schemas import (
     NfoPreviewRequest,
     NfoPreviewView,
     ProviderEpisodeView,
+    ScheduledRefreshView,
     ScrapeBindingView,
     SeasonArtworkExtractionResultView,
 )
@@ -45,6 +47,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
@@ -291,6 +294,21 @@ def update_scrape_config(
 ) -> dict[str, object]:
     binding = service.save_binding(media_id, body.to_domain(media_id))
     return ok(request, ScrapeBindingView.from_domain(binding).model_dump(mode="json"))
+
+
+@router.post("/{media_id}/scheduled-refresh/run")
+async def run_scheduled_refresh_now(
+    media_id: str,
+    request: Request,
+    service: Annotated[
+        ScheduledRefreshService, Depends(get_scheduled_refresh_service)
+    ],
+) -> dict[str, object]:
+    schedule = await service.run_media(media_id)
+    return ok(
+        request,
+        ScheduledRefreshView.from_domain(schedule).model_dump(mode="json"),
+    )
 
 
 @router.post("/{media_id}/naming-preview")

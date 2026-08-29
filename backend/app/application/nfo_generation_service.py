@@ -102,6 +102,11 @@ class NfoGenerationService:
         overwrite_existing: bool = False,
         locked_fields: tuple[str, ...] = (),
         manual_values: dict[str, object] | None = None,
+        preloaded_sources: Mapping[
+            tuple[str, str, int],
+            tuple[MetadataCandidate, tuple[ProviderEpisode, ...]],
+        ]
+        | None = None,
     ) -> NfoGenerationResult:
         if not confirmed:
             raise NfoGenerationError("CONFIRMATION_REQUIRED", "生成 NFO 前需要明确确认")
@@ -159,7 +164,10 @@ class NfoGenerationService:
             metadata=binding.metadata if binding else None,
         )
         primary_source = await self._load_source(
-            selected_provider, effective_external_id, provider_season
+            selected_provider,
+            effective_external_id,
+            provider_season,
+            preloaded_sources,
         )
         subject = primary_source.subject
         episodes = primary_source.episodes
@@ -185,7 +193,10 @@ class NfoGenerationService:
                 if source_key not in source_cache
             ]
             loaded_sources = await asyncio.gather(
-                *(self._load_source(*source_key) for source_key in missing_sources)
+                *(
+                    self._load_source(*source_key, preloaded_sources)
+                    for source_key in missing_sources
+                )
             )
             source_cache.update(
                 {
@@ -206,6 +217,23 @@ class NfoGenerationService:
         configured_excluded_folders = excluded_folders or self._metadata_string_tuple(
             binding.metadata.get("nfo_excluded_folders") if binding else None
         )
+        if self._ignore_markers is not None and configured_excluded_folders:
+            try:
+                marker_result = self._ignore_markers.ensure_relative_directories(
+                    item.root_path, configured_excluded_folders
+                )
+            except ValueError as exc:
+                raise NfoGenerationError(
+                    "INVALID_EXCLUDED_FOLDER",
+                    "手动排除目录超出当前番剧范围",
+                ) from exc
+            failed_marker_count = getattr(marker_result, "failed_count", 0)
+            if failed_marker_count:
+                raise NfoGenerationError(
+                    "NFO_WRITE_FAILED",
+                    "无法在部分手动排除目录中创建 .ignore",
+                    {"failed_count": failed_marker_count},
+                )
         excluded_folder_set = {
             self._normalize_folder(folder) for folder in configured_excluded_folders
         }
@@ -621,8 +649,20 @@ class NfoGenerationService:
         return provider, external_id, provider_season
 
     async def _load_source(
-        self, provider: str, external_id: str, provider_season: int
+        self,
+        provider: str,
+        external_id: str,
+        provider_season: int,
+        preloaded_sources: Mapping[
+            tuple[str, str, int],
+            tuple[MetadataCandidate, tuple[ProviderEpisode, ...]],
+        ]
+        | None = None,
     ) -> _LoadedSource:
+        key = self._source_key(provider, external_id, provider_season)
+        if preloaded_sources and key in preloaded_sources:
+            subject, episodes = preloaded_sources[key]
+            return _LoadedSource(provider, external_id, provider_season, subject, episodes)
         metadata_provider = self._providers.get(provider)
         if metadata_provider is None:
             raise NfoGenerationError(

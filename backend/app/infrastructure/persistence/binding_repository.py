@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import time
+
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.media import (
     EpisodeSourceRule,
     ProviderSubjectBinding,
+    ScheduledRefresh,
     ScrapeBinding,
     normalize_primary_binding,
 )
@@ -69,6 +72,16 @@ class SqlAlchemyBindingRepository:
                 }
                 for rule in binding.episode_source_rules
             ]
+            metadata["scheduled_refresh"] = {
+                "enabled": binding.scheduled_refresh.enabled,
+                "daily_time": binding.scheduled_refresh.daily_time,
+                "last_run_at": binding.scheduled_refresh.last_run_at,
+                "last_status": binding.scheduled_refresh.last_status,
+                "last_message": binding.scheduled_refresh.last_message,
+                "current_episode": binding.scheduled_refresh.current_episode,
+                "total_episodes": binding.scheduled_refresh.total_episodes,
+                "final_air_date": binding.scheduled_refresh.final_air_date,
+            }
             record.metadata_json = metadata
         return binding
 
@@ -80,6 +93,9 @@ class SqlAlchemyBindingRepository:
         )
         rules = SqlAlchemyBindingRepository._rules_from_json(
             metadata.pop("episode_source_rules", None)
+        )
+        scheduled_refresh = SqlAlchemyBindingRepository._scheduled_refresh_from_json(
+            metadata.pop("scheduled_refresh", None)
         )
         if not subjects:
             subjects = SqlAlchemyBindingRepository._legacy_subjects(record, metadata)
@@ -99,7 +115,57 @@ class SqlAlchemyBindingRepository:
             metadata=metadata,
             provider_subjects=subjects,
             episode_source_rules=rules,
+            scheduled_refresh=scheduled_refresh,
         ))
+
+    @staticmethod
+    def _scheduled_refresh_from_json(value: object) -> ScheduledRefresh:
+        if not isinstance(value, dict):
+            return ScheduledRefresh()
+        daily_time = SqlAlchemyBindingRepository._daily_time(value.get("daily_time"))
+        last_status = value.get("last_status")
+        return ScheduledRefresh(
+            enabled=value.get("enabled") is True,
+            daily_time=daily_time,
+            last_run_at=SqlAlchemyBindingRepository._optional_text(
+                value.get("last_run_at")
+            ),
+            last_status=(
+                last_status
+                if last_status in {"never", "success", "failed", "completed"}
+                else "never"
+            ),
+            last_message=SqlAlchemyBindingRepository._optional_text(
+                value.get("last_message")
+            ),
+            current_episode=SqlAlchemyBindingRepository._optional_int(
+                value.get("current_episode")
+            ),
+            total_episodes=SqlAlchemyBindingRepository._optional_int(
+                value.get("total_episodes")
+            ),
+            final_air_date=SqlAlchemyBindingRepository._optional_text(
+                value.get("final_air_date")
+            ),
+        )
+
+    @staticmethod
+    def _optional_text(value: object) -> str | None:
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _optional_int(value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @staticmethod
+    def _daily_time(value: object) -> str:
+        if not isinstance(value, str):
+            return "04:00"
+        try:
+            parsed = time.fromisoformat(value)
+        except ValueError:
+            return "04:00"
+        return parsed.strftime("%H:%M")
 
     @staticmethod
     def _subjects_from_json(value: object) -> tuple[ProviderSubjectBinding, ...]:

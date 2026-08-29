@@ -188,6 +188,20 @@ class EpisodeSourceRule:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduledRefresh:
+    """Per-work daily metadata/NFO refresh configuration and last-run state."""
+
+    enabled: bool = False
+    daily_time: str = "04:00"
+    last_run_at: str | None = None
+    last_status: str = "never"
+    last_message: str | None = None
+    current_episode: int | None = None
+    total_episodes: int | None = None
+    final_air_date: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ScrapeBinding:
     media_id: str
     bangumi_id: str | None = None
@@ -204,6 +218,7 @@ class ScrapeBinding:
     metadata: dict[str, object] = field(default_factory=dict)
     provider_subjects: tuple[ProviderSubjectBinding, ...] = ()
     episode_source_rules: tuple[EpisodeSourceRule, ...] = ()
+    scheduled_refresh: ScheduledRefresh = field(default_factory=ScheduledRefresh)
 
 
 def normalize_primary_binding(binding: ScrapeBinding) -> ScrapeBinding:

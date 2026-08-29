@@ -50,21 +50,66 @@ class IgnoreMarkerManager:
                 if directory.is_symlink() or not self._matches(directory):
                     continue
                 matched += 1
-                marker = directory / ".ignore"
-                if marker.exists():
+                outcome = self._ensure_marker(directory)
+                if outcome == "existing":
                     existing += 1
-                    continue
-                try:
-                    marker.open("x", encoding="utf-8").close()
-                except FileExistsError:
-                    existing += 1
-                except OSError:
+                elif outcome == "failed":
                     failed += 1
                 else:
                     created += 1
 
         self.last_result = IgnoreMarkerResult(matched, created, existing, failed)
         return self.last_result
+
+    def ensure_relative_directories(
+        self,
+        scope_root: Path,
+        relative_folders: tuple[str, ...],
+    ) -> IgnoreMarkerResult:
+        """Create markers for explicit per-work exclusions, independent of auto rules."""
+
+        scope = scope_root.resolve(strict=False)
+        self._assert_within_media_root(scope)
+        if not scope.is_dir():
+            return IgnoreMarkerResult()
+
+        matched = created = existing = failed = 0
+        for raw_folder in self.normalize_patterns(relative_folders):
+            relative = Path(raw_folder) if raw_folder != "." else Path()
+            target = (scope / relative).resolve(strict=False)
+            self._assert_within_media_root(target)
+            try:
+                target.relative_to(scope)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Ignore marker target is outside the selected work: {raw_folder}"
+                ) from exc
+            if not target.is_dir() or target.is_symlink():
+                continue
+            matched += 1
+            outcome = self._ensure_marker(target)
+            if outcome == "existing":
+                existing += 1
+            elif outcome == "failed":
+                failed += 1
+            else:
+                created += 1
+        result = IgnoreMarkerResult(matched, created, existing, failed)
+        self.last_result = result
+        return result
+
+    @staticmethod
+    def _ensure_marker(directory: Path) -> str:
+        marker = directory / ".ignore"
+        if marker.exists():
+            return "existing" if marker.is_file() else "failed"
+        try:
+            marker.open("x", encoding="utf-8").close()
+        except FileExistsError:
+            return "existing" if marker.is_file() else "failed"
+        except OSError:
+            return "failed"
+        return "created"
 
     def _matches(self, directory: Path) -> bool:
         relative = directory.relative_to(self._media_root).as_posix().casefold()

@@ -100,7 +100,7 @@ describe("NfoPreviewPanel", () => {
     const onSelectionChange = vi.fn();
     const { rerender } = render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "排除文件夹" }));
+    fireEvent.click(screen.getByRole("button", { name: "排除并添加 .ignore" }));
 
     expect(onSelectionChange).toHaveBeenLastCalledWith([], [], ["raw"]);
     rerender(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={["raw"]} includedPaths={[]} onSelectionChange={onSelectionChange} onRefresh={vi.fn()} />);

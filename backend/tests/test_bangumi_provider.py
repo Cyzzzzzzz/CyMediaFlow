@@ -154,6 +154,8 @@ async def test_bangumi_get_subject_normalizes_detail(tmp_path: Path) -> None:
     assert detail.original_title == "DRAGON BALL"
     assert detail.summary == "寻找龙珠的冒险。"
     assert detail.platform == "TV"
+    assert detail.episode_count == 153
+    assert detail.total_episode_count == 153
     assert detail.infobox[1].values[0].label == "英文名"
     assert detail.rating and detail.rating.score == 8.1
     assert detail.tags[0].name == "热血"

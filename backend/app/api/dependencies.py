@@ -10,6 +10,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.container import Container
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
@@ -51,3 +52,7 @@ def get_season_artwork_service(request: Request) -> SeasonArtworkExtractionServi
 
 def get_result_cache(request: Request) -> SqlAlchemyResultCache:
     return get_container(request).result_cache
+
+
+def get_scheduled_refresh_service(request: Request) -> ScheduledRefreshService:
+    return get_container(request).scheduled_refresh_service

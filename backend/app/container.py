@@ -14,6 +14,7 @@ from app.application.naming_service import NamingPreviewService
 from app.application.nfo_generation_service import NfoGenerationService
 from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
+from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.core.config import Settings
 from app.core.path_safety import path_is_within
@@ -53,6 +54,7 @@ class Container:
     remote_artwork: HttpRemoteArtworkDownloader
     provider_artwork_cache: ProviderArtworkCache
     result_cache: SqlAlchemyResultCache
+    scheduled_refresh_service: ScheduledRefreshService
 
 
 def build_container(settings: Settings) -> Container:
@@ -101,7 +103,9 @@ def build_container(settings: Settings) -> Container:
         proxy_url=tmdb_proxy,
     )
     providers = {"bangumi": bangumi, "tmdb": tmdb}
-    service = MediaLibraryService(catalog, repository, providers, nfo_catalog)
+    service = MediaLibraryService(
+        catalog, repository, providers, nfo_catalog, ignore_markers
+    )
     naming_service = NamingPreviewService(catalog, repository, FilenameParser())
     nfo_service = NfoPreviewService(catalog, repository, FilenameParser())
     episode_mapping_suggestion_service = EpisodeMappingSuggestionService(
@@ -147,6 +151,12 @@ def build_container(settings: Settings) -> Container:
         timeout_seconds=settings.request_timeout_seconds,
         proxy_url=proxy_url,
     )
+    scheduled_refresh_service = ScheduledRefreshService(
+        repository,
+        providers,
+        nfo_generation_service,
+        result_cache,
+    )
     return Container(
         settings=settings,
         session_factory=factory,
@@ -166,6 +176,7 @@ def build_container(settings: Settings) -> Container:
         remote_artwork=remote_artwork,
         provider_artwork_cache=provider_artwork_cache,
         result_cache=result_cache,
+        scheduled_refresh_service=scheduled_refresh_service,
     )
 
 

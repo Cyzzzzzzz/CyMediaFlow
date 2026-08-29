@@ -137,7 +137,7 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
               <button className="folder-toggle" type="button" aria-expanded={!collapsed} onClick={() => setCollapsedFolders((current) => toggleSetValue(current, folder))}><FolderSimple size={17} /><strong title={folder}>{folder === "." ? "根目录" : folder}</strong><small>{entries.length} 个文件</small><CaretDown size={15} /></button>
               <div className="folder-actions">
                 {selectable.length && !directlyExcluded && !inheritedExcluded ? <button className="folder-select" type="button" onClick={() => toggleFolder(entries, !allSelected)}>{allSelected ? "取消本文件夹" : "选择本文件夹"}</button> : null}
-                <button className={`folder-exclude ${directlyExcluded || inheritedExcluded ? "active" : ""}`} type="button" disabled={inheritedExcluded} onClick={() => toggleFolderExclusion(folder, entries)}>{directlyExcluded ? "取消排除" : inheritedExcluded ? "已随上级排除" : "排除文件夹"}</button>
+                <button className={`folder-exclude ${directlyExcluded || inheritedExcluded ? "active" : ""}`} type="button" disabled={inheritedExcluded} onClick={() => toggleFolderExclusion(folder, entries)}>{directlyExcluded ? "取消排除" : inheritedExcluded ? "已随上级排除" : "排除并添加 .ignore"}</button>
               </div>
             </header>
             {!collapsed ? <div className="rename-diff-list">
@@ -146,6 +146,7 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
           </section>;
         })}
       </div>
+      {excludedFolders.length ? <p className="preview-ignore-hint">保存配置时会在手动排除的文件夹内创建 `.ignore`；取消排除不会自动删除已有标记。</p> : null}
     </> : null}
   </div>;
 }

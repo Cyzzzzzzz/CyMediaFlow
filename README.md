@@ -2,7 +2,7 @@
 
 CyMediaFlow is a NAS-first media library manager for auditing anime folders, binding Bangumi/TMDB identities, planning NFO sidecars, and verifying Emby scraping results.
 
-The current vertical slice treats video files as immutable. It scans a configured test library, renders a poster-wall UI, searches and reads Bangumi/TMDB metadata, and persists per-series scrape configuration outside the media root. The detail drawer reads local series, season, and episode NFO metadata with artwork and provides an explainable same-basename sidecar preview. After explicit confirmation it can create or update NFO files and save provider artwork as standard Emby sidecars. Per-field locks preserve selected existing or manually edited values while unlocked fields are refreshed. Episode NFO generation uses `ffprobe` to add video, audio, subtitle, and attachment stream details when available.
+The current vertical slice treats video files as immutable. It scans a configured test library, renders a poster-wall UI, searches and reads Bangumi/TMDB metadata, and persists per-series scrape configuration outside the media root. The detail drawer reads local series, season, and episode NFO metadata with artwork and provides an explainable same-basename sidecar preview. After explicit confirmation it can create or update NFO files and save provider artwork as standard Emby sidecars. Per-field locks preserve selected existing or manually edited values while unlocked fields are refreshed. Episode NFO generation uses `ffprobe` to add video, audio, subtitle, and attachment stream details when available. Each work can also run one saved-config refresh per NAS-local day and automatically stop after Bangumi confirms a safe post-air final-episode update.
 
 ## Local development
 

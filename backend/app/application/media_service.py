@@ -2,20 +2,23 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
 from app.application.ports import (
     BindingRepositoryPort,
+    IgnoreMarkerPort,
     MediaCatalogPort,
     MetadataProviderPort,
     NfoCatalogPort,
 )
-from app.core.errors import MediaNotFoundError, ProviderUnavailableError
+from app.core.errors import DomainError, MediaNotFoundError, ProviderUnavailableError
 from app.domain.media import (
     MediaItem,
     MetadataCandidate,
     ProviderEpisode,
+    ScheduledRefresh,
     ScrapeBinding,
     normalize_primary_binding,
 )
@@ -29,6 +32,7 @@ class MediaLibraryService:
         bindings: BindingRepositoryPort,
         metadata_provider: MetadataProviderPort | Mapping[str, MetadataProviderPort],
         nfo_catalog: NfoCatalogPort,
+        ignore_markers: IgnoreMarkerPort | None = None,
     ) -> None:
         self._catalog = catalog
         self._bindings = bindings
@@ -38,6 +42,7 @@ class MediaLibraryService:
             else {"bangumi": metadata_provider}
         )
         self._nfo_catalog = nfo_catalog
+        self._ignore_markers = ignore_markers
 
     async def list_media(
         self,
@@ -207,7 +212,7 @@ class MediaLibraryService:
         return artwork
 
     def save_binding(self, media_id: str, binding: ScrapeBinding) -> ScrapeBinding:
-        self.get_media(media_id)
+        item, existing = self.get_media(media_id)
         if binding.media_id != media_id:
             binding = ScrapeBinding(
                 media_id=media_id,
@@ -225,5 +230,68 @@ class MediaLibraryService:
                 metadata=binding.metadata,
                 provider_subjects=binding.provider_subjects,
                 episode_source_rules=binding.episode_source_rules,
+                scheduled_refresh=binding.scheduled_refresh,
             )
+        binding = replace(
+            binding,
+            scheduled_refresh=self._merge_schedule(
+                existing.scheduled_refresh if existing else None,
+                binding.scheduled_refresh,
+            ),
+        )
+        excluded_folders = self._metadata_string_tuple(
+            binding.metadata.get("nfo_excluded_folders")
+        )
+        if self._ignore_markers is not None and excluded_folders:
+            try:
+                result = self._ignore_markers.ensure_relative_directories(
+                    item.root_path, excluded_folders
+                )
+            except ValueError as exc:
+                raise DomainError(
+                    code="INVALID_EXCLUDED_FOLDER",
+                    message="手动排除目录超出当前番剧范围",
+                    status_code=400,
+                ) from exc
+            failed_count = getattr(result, "failed_count", 0)
+            if failed_count:
+                raise DomainError(
+                    code="IGNORE_MARKER_WRITE_FAILED",
+                    message="无法在部分手动排除目录中创建 .ignore",
+                    status_code=500,
+                    details={"failed_count": failed_count},
+                )
         return self._bindings.upsert(normalize_primary_binding(binding))
+
+    @staticmethod
+    def _merge_schedule(
+        existing: ScheduledRefresh | None,
+        requested: ScheduledRefresh,
+    ) -> ScheduledRefresh:
+        if existing is None:
+            return ScheduledRefresh(
+                enabled=requested.enabled,
+                daily_time=requested.daily_time,
+            )
+        if requested.enabled and not existing.enabled and existing.last_status == "completed":
+            return ScheduledRefresh(
+                enabled=True,
+                daily_time=requested.daily_time,
+            )
+        return replace(
+            existing,
+            enabled=requested.enabled,
+            daily_time=requested.daily_time,
+        )
+
+    @staticmethod
+    def _metadata_string_tuple(value: object) -> tuple[str, ...]:
+        if not isinstance(value, list | tuple):
+            return ()
+        return tuple(
+            dict.fromkeys(
+                item.strip().replace("\\", "/")
+                for item in value
+                if isinstance(item, str) and item.strip()
+            )
+        )

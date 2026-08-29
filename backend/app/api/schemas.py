@@ -19,6 +19,7 @@ from app.domain.media import (
     ProviderRelatedSubject,
     ProviderSubjectBinding,
     ProviderTag,
+    ScheduledRefresh,
     ScrapeBinding,
 )
 from app.domain.nfo import NfoGenerationResult, NfoPreview, NfoPreviewEntry
@@ -162,6 +163,24 @@ class EpisodeMappingSuggestionView(BaseModel):
         )
 
 
+class ScheduledRefreshView(BaseModel):
+    enabled: bool = False
+    daily_time: str = Field(default="04:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    last_run_at: str | None = None
+    last_status: Literal["never", "success", "failed", "completed"] = "never"
+    last_message: str | None = Field(default=None, max_length=1000)
+    current_episode: int | None = Field(default=None, ge=0, le=100000)
+    total_episodes: int | None = Field(default=None, ge=1, le=100000)
+    final_air_date: str | None = Field(default=None, max_length=20)
+
+    @classmethod
+    def from_domain(cls, schedule: ScheduledRefresh) -> ScheduledRefreshView:
+        return cls.model_validate(schedule, from_attributes=True)
+
+    def to_domain(self) -> ScheduledRefresh:
+        return ScheduledRefresh(**self.model_dump())
+
+
 class ScrapeBindingView(BaseModel):
     bangumi_id: str | None = None
     tmdb_id: str | None = None
@@ -177,6 +196,7 @@ class ScrapeBindingView(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     provider_subjects: list[ProviderSubjectBindingView] = Field(default_factory=list)
     episode_source_rules: list[EpisodeSourceRuleView] = Field(default_factory=list)
+    scheduled_refresh: ScheduledRefreshView = Field(default_factory=ScheduledRefreshView)
 
     @model_validator(mode="after")
     def validate_work_matching(self) -> ScrapeBindingView:
@@ -247,6 +267,9 @@ class ScrapeBindingView(BaseModel):
                 EpisodeSourceRuleView.from_domain(rule)
                 for rule in binding.episode_source_rules
             ],
+            scheduled_refresh=ScheduledRefreshView.from_domain(
+                binding.scheduled_refresh
+            ),
         )
 
     def to_domain(self, media_id: str) -> ScrapeBinding:
@@ -266,6 +289,7 @@ class ScrapeBindingView(BaseModel):
             metadata=self.metadata,
             provider_subjects=tuple(subject.to_domain() for subject in self.provider_subjects),
             episode_source_rules=tuple(rule.to_domain() for rule in self.episode_source_rules),
+            scheduled_refresh=self.scheduled_refresh.to_domain(),
         )
 
 

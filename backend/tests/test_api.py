@@ -237,6 +237,10 @@ def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None
                 "local_path": None,
                 }
             ],
+            "scheduled_refresh": {
+                "enabled": True,
+                "daily_time": "05:30",
+            },
         }
         saved = client.put(f"/api/v1/media/{item['id']}/scrape-config", json=binding)
         detail = client.get(f"/api/v1/media/{item['id']}")
@@ -249,7 +253,61 @@ def test_scrape_binding_round_trip_does_not_modify_media(tmp_path: Path) -> None
     ]
     assert detail.json()["data"]["binding"]["provider_subjects"][1]["external_id"] == "67890"
     assert detail.json()["data"]["binding"]["episode_source_rules"][0]["number_mode"] == "sort"
+    assert detail.json()["data"]["binding"]["scheduled_refresh"] == {
+        "enabled": True,
+        "daily_time": "05:30",
+        "last_run_at": None,
+        "last_status": "never",
+        "last_message": None,
+        "current_episode": None,
+        "total_episodes": None,
+        "final_air_date": None,
+    }
     assert video.read_bytes() == b"untouched-video"
+
+
+def test_saving_manual_nfo_folder_exclusion_creates_ignore_marker(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    series = media_root / "Example Show"
+    extras = series / "OVA"
+    extras.mkdir(parents=True)
+    (extras / "Example Show OVA.mkv").write_bytes(b"untouched")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+        ignore_marker_enabled=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        item = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]
+        binding = {
+            "bangumi_id": "12345",
+            "folder_template": "{title} ({year})/Season {season:02}",
+            "filename_template": "{title} S{season:02}E{episode:02}",
+            "metadata": {"nfo_excluded_folders": ["OVA"]},
+            "provider_subjects": [
+                {
+                    "provider": "bangumi",
+                    "external_id": "12345",
+                    "title": "Example Show",
+                    "role": "primary",
+                }
+            ],
+        }
+
+        response = client.put(
+            f"/api/v1/media/{item['id']}/scrape-config", json=binding
+        )
+
+    assert response.status_code == 200
+    assert (extras / ".ignore").is_file()
+    assert (extras / "Example Show OVA.mkv").read_bytes() == b"untouched"
 
 
 def test_episode_mapping_suggestion_splits_bangumi_cours_by_remote_sort(

@@ -15,6 +15,7 @@ vi.mock("./api", () => ({
     metadataEpisodes: vi.fn(),
     scrapeInfo: vi.fn(),
     saveBinding: vi.fn(),
+    runScheduledRefresh: vi.fn(),
     generateNfo: vi.fn(),
     suggestEpisodeMapping: vi.fn(),
     nfoPreview: vi.fn(),
@@ -42,6 +43,7 @@ const binding: MediaBinding = {
     image_url: null,
     role: "primary",
   }],
+  scheduled_refresh: { enabled: false, daily_time: "04:00", last_run_at: null, last_status: "never", last_message: null, current_episode: null, total_episodes: null, final_air_date: null },
   episode_source_rules: [{
     provider: "bangumi",
     external_id: "111",
@@ -109,6 +111,11 @@ describe("ScrapeDrawer segmented mapping", () => {
     vi.mocked(libraryApi.metadataEpisodes).mockResolvedValue([]);
     vi.mocked(libraryApi.scrapeInfo).mockResolvedValue({ media_id: "anime-1", series: null, seasons: [] });
     vi.mocked(libraryApi.saveBinding).mockImplementation(async (_id, value) => value);
+    vi.mocked(libraryApi.runScheduledRefresh).mockResolvedValue({
+      enabled: false, daily_time: "05:30", last_run_at: "2026-09-28T05:30:00+08:00",
+      last_status: "completed", last_message: "已完成最终更新：Bangumi 14/14，定时刷新已停止",
+      current_episode: 14, total_episodes: 14, final_air_date: "2026-09-27",
+    });
     vi.mocked(libraryApi.generateNfo).mockResolvedValue({
       media_id: "anime-1", bangumi_id: "111", provider: "bangumi", external_id: "111",
       created_files: [], updated_files: [], locked_fields: [], created_artwork_files: [],
@@ -187,6 +194,28 @@ describe("ScrapeDrawer segmented mapping", () => {
       "季集映射",
       "刮削信息",
     ]);
+  });
+
+  it("configures and runs the per-work daily refresh", async () => {
+    renderDrawer();
+    await screen.findByText("主作品");
+    fireEvent.click(screen.getByText("刮削信息"));
+
+    const toggle = await screen.findByRole("checkbox");
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByDisplayValue("04:00"), { target: { value: "05:30" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
+
+    await waitFor(() => expect(libraryApi.saveBinding).toHaveBeenCalledWith(
+      "anime-1",
+      expect.objectContaining({
+        scheduled_refresh: expect.objectContaining({ enabled: true, daily_time: "05:30" }),
+      }),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(libraryApi.runScheduledRefresh).toHaveBeenCalledWith("anime-1"));
+    expect(await screen.findByText(/已完成最终更新/)).toBeTruthy();
   });
 
   it("hides legacy offsets, labels providers, and applies a reviewable suggestion", async () => {

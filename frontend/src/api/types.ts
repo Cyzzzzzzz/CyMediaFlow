@@ -61,11 +61,18 @@ export type EpisodeMappingSuggestion = {
   rules: EpisodeSourceRule[]; detected_ranges: DetectedEpisodeRange[];
   detected_single_files: DetectedSingleFile[]; warnings: string[];
 };
+export type ScheduledRefresh = {
+  enabled: boolean; daily_time: string; last_run_at: string | null;
+  last_status: "never" | "success" | "failed" | "completed";
+  last_message: string | null; current_episode: number | null;
+  total_episodes: number | null; final_air_date: string | null;
+};
 export type MediaBinding = {
   bangumi_id: string | null; tmdb_id: string | null; preferred_title: string | null; content_kind: string;
   year: number | null; season_number: number; episode_offset: number; folder_template: string; filename_template: string;
   emby_enabled: boolean; image_url: string | null; metadata: Record<string, unknown>;
   provider_subjects: ProviderSubjectBinding[]; episode_source_rules: EpisodeSourceRule[];
+  scheduled_refresh: ScheduledRefresh;
 };
 export type SettingsView = {
   media_root: string; allowed_media_root: string; allowed_media_roots: string[]; media_root_exists: boolean; media_root_readable: boolean;

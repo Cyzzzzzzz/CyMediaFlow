@@ -1,9 +1,9 @@
-import { CaretDown, CheckCircle, CrownSimple, Cube, FileText, FilmSlate, FloppyDisk, IdentificationBadge, ListNumbers, MagicWand, MagnifyingGlass, Plus, Trash, X } from "@phosphor-icons/react";
+import { CaretDown, CheckCircle, ClockCountdown, CrownSimple, Cube, FileText, FilmSlate, FloppyDisk, IdentificationBadge, ListNumbers, MagicWand, MagnifyingGlass, Play, Plus, Trash, X } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import { imageSource } from "../../api/images";
-import type { EpisodeMappingSuggestion, EpisodeSourceRule, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, ProviderSubjectBinding, ProviderSubjectRole } from "../../api/types";
+import type { EpisodeMappingSuggestion, EpisodeSourceRule, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, ProviderSubjectBinding, ProviderSubjectRole, ScheduledRefresh } from "../../api/types";
 import { libraryApi } from "./api";
 import { NfoPreviewPanel } from "./NfoPreviewPanel";
 import { ScrapeInfoPanel, type BangumiSeasonMetadataGroup } from "./ScrapeInfoPanel";
@@ -16,6 +16,7 @@ const defaults: MediaBinding = {
   season_number: 1, episode_offset: 0, folder_template: "{title} ({year})/Season {season:02}",
   filename_template: "{title} S{season:02}E{episode:02}", emby_enabled: true, image_url: null, metadata: {},
   provider_subjects: [], episode_source_rules: [],
+  scheduled_refresh: { enabled: false, daily_time: "04:00", last_run_at: null, last_status: "never", last_message: null, current_episode: null, total_episodes: null, final_air_date: null },
 };
 const emptyPaths: string[] = [];
 
@@ -216,6 +217,21 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const refreshNfoPreview = useMutation({
     mutationFn: () => libraryApi.nfoPreview(item.id, form, true),
     onSuccess: (preview) => client.setQueryData(nfoPreviewKey, preview),
+  });
+  const runScheduledRefresh = useMutation({
+    mutationFn: async () => {
+      const savedBinding = await libraryApi.saveBinding(item.id, form);
+      setForm(savedBinding);
+      return libraryApi.runScheduledRefresh(item.id);
+    },
+    onSuccess: (schedule) => {
+      setForm((current) => ({ ...current, scheduled_refresh: schedule }));
+      setArtworkRevision(Date.now());
+      void client.invalidateQueries({ queryKey: ["library"] });
+      void client.invalidateQueries({ queryKey: ["binding", item.id] });
+      void client.invalidateQueries({ queryKey: ["scrape-info", item.id] });
+      void client.invalidateQueries({ queryKey: ["nfo-preview", item.id] });
+    },
   });
 
   useEffect(() => {
@@ -444,6 +460,15 @@ export function ScrapeDrawer({ item, onClose }: Props) {
           {episodeMappingMode === "segments" ? <p className="notice">分段规则本身已经包含 Emby 季号与本地集范围，因此不再使用顶层季号或集数偏移。规则允许第 0 集，但同一季度的范围不能重叠。</p> : null}
         </Accordion>
         <Accordion icon={<FilmSlate size={21} />} title="刮削信息" summary={scrapeSummary(scrapeInfo.data)} open={openSection === "scrape"} onToggle={() => setOpenSection("scrape")}>
+          <ScheduledRefreshCard
+            schedule={form.scheduled_refresh}
+            canRefresh={!!nfoExternalId}
+            tracksBangumi={hasBangumiBroadcastTracking(form)}
+            running={runScheduledRefresh.isPending}
+            runError={runScheduledRefresh.isError ? (apiErrorMessage(runScheduledRefresh.error) || "立即刷新失败，请检查刮削配置与后端日志。") : null}
+            onChange={(scheduledRefresh) => setForm((current) => ({ ...current, scheduled_refresh: scheduledRefresh }))}
+            onRun={() => runScheduledRefresh.mutate()}
+          />
           <ScrapeInfoPanel
             mediaId={item.id}
             localSeasonNumbers={item.seasons}
@@ -565,6 +590,24 @@ function EpisodeSourceRulesEditor({ subjects, rules, defaultSeason, onChange, on
 
 function Accordion({ icon, title, summary, open, onToggle, children }: { icon: ReactNode; title: string; summary: string; open: boolean; onToggle: () => void; children: ReactNode }) {
   return <section className={`accordion ${open ? "open" : ""}`}><button className="accordion-trigger" type="button" onClick={onToggle} aria-expanded={open}><span className="accordion-heading">{icon}<span><strong>{title}</strong><small>{summary}</small></span></span><CaretDown size={18} /></button>{open ? <div className="accordion-body">{children}</div> : null}</section>;
+}
+function ScheduledRefreshCard({ schedule, canRefresh, tracksBangumi, running, runError, onChange, onRun }: { schedule: ScheduledRefresh; canRefresh: boolean; tracksBangumi: boolean; running: boolean; runError: string | null; onChange: (schedule: ScheduledRefresh) => void; onRun: () => void }) {
+  const progress = schedule.current_episode !== null && schedule.total_episodes !== null
+    ? `${schedule.current_episode}/${schedule.total_episodes}`
+    : null;
+  return <section className={`scheduled-refresh-card ${schedule.last_status}`}>
+    <div className="scheduled-refresh-heading">
+      <span><ClockCountdown size={18} /><span><strong>定时刷新</strong><small>按当前作品配置每日覆盖未锁定字段</small></span></span>
+      <label className="compact-toggle"><input type="checkbox" checked={schedule.enabled} disabled={!canRefresh && !schedule.enabled} onChange={(event) => onChange({ ...schedule, enabled: event.target.checked })} /><span>{schedule.enabled ? "已启用" : "已停用"}</span></label>
+    </div>
+    <div className="scheduled-refresh-controls">
+      <label><span>NAS 本地时间</span><input type="time" value={schedule.daily_time} onChange={(event) => onChange({ ...schedule, daily_time: event.target.value })} /></label>
+      <button className="preview-refresh" type="button" onClick={onRun} disabled={!canRefresh || running}><Play size={14} weight="fill" />{running ? "刷新中…" : "立即刷新"}</button>
+    </div>
+    {runError ? <p className="scheduled-refresh-status error">{runError}</p> : null}
+    {schedule.last_message ? <p className="scheduled-refresh-status">{schedule.last_message}{progress && !schedule.last_message.includes(progress) ? ` · 进度 ${progress}` : ""}{schedule.final_air_date ? ` · 末集 ${schedule.final_air_date}` : ""}</p> : null}
+    {!canRefresh ? <p className="scheduled-refresh-hint">请先保存主作品与 NFO 配置。</p> : tracksBangumi ? <p className="scheduled-refresh-hint">Bangumi 末集播出后会再完成一次最终更新，并自动停用。</p> : <p className="scheduled-refresh-hint">可每日刷新；自动完结停用需要 Bangumi 主条目或 Bangumi 正片分段。</p>}
+  </section>;
 }
 function Field({ label, wide = false, children }: { label: string; wide?: boolean; children: ReactNode }) { return <label className={wide ? "wide" : ""}><span>{label}</span>{children}</label>; }
 function stringList(value: unknown) {
@@ -722,4 +765,9 @@ function scrapeSummary(info: LocalScrapeInfo | undefined) {
   if (!info) return "剧集 · 季度 · 单集";
   const episodes = info.seasons.reduce((total, season) => total + season.episodes.length, 0);
   return `${info.seasons.length} 季 · ${episodes} 集`;
+}
+function hasBangumiBroadcastTracking(binding: MediaBinding) {
+  if (primaryProvider(binding) === "bangumi" && !!binding.bangumi_id) return true;
+  return mappingMode(binding.metadata.nfo_episode_mapping_mode) === "segments"
+    && binding.episode_source_rules.some((rule) => rule.provider === "bangumi" && !rule.local_path);
 }

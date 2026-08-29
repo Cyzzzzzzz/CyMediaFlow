@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -56,6 +57,24 @@ class EpisodeArtworkGeneratorPort(Protocol):
 
 class IgnoreMarkerPort(Protocol):
     def synchronize(self, scope_root: Path | None = None) -> object: ...
+
+    def ensure_relative_directories(
+        self, scope_root: Path, relative_folders: tuple[str, ...]
+    ) -> object: ...
+
+
+class ResultCachePort(Protocol):
+    def put(
+        self,
+        media_id: str,
+        category: str,
+        payload: object,
+        parameters: Mapping[str, object] | None = None,
+    ) -> None: ...
+
+    def delete(
+        self, media_id: str, categories: Iterable[str] | None = None
+    ) -> None: ...
 
 
 class RemoteArtworkDownloaderPort(Protocol):

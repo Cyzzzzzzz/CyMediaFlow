@@ -47,3 +47,29 @@ def test_ignore_marker_rejects_scope_outside_media_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="outside the media root"):
         manager.synchronize(outside)
+
+
+def test_manual_folder_exclusion_creates_marker_even_when_auto_rules_are_disabled(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "Example Show"
+    extras = work / "Custom Extras"
+    extras.mkdir(parents=True)
+    manager = IgnoreMarkerManager(tmp_path, False, ())
+
+    result = manager.ensure_relative_directories(work, ("Custom Extras",))
+
+    assert result.matched_count == 1
+    assert result.created_count == 1
+    assert (extras / ".ignore").is_file()
+
+
+def test_manual_folder_exclusion_cannot_escape_selected_work(tmp_path: Path) -> None:
+    work = tmp_path / "Example Show"
+    outside = tmp_path / "Other Show"
+    work.mkdir()
+    outside.mkdir()
+    manager = IgnoreMarkerManager(tmp_path, True, ())
+
+    with pytest.raises(ValueError, match="outside the selected work"):
+        manager.ensure_relative_directories(work, ("../Other Show",))
