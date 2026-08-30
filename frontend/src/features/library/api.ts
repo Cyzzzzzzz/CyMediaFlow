@@ -1,5 +1,5 @@
 import { apiRequest } from "../../api/client";
-import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding, ScheduledRefresh, SeasonArtworkExtractionResult, SubtitleMatchPreview, SubtitleRenameResult } from "../../api/types";
+import type { CachedMetadataSearch, EpisodeFileRenameResult, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding, ScheduledRefresh, SeasonArtworkExtractionResult, SubtitleMatchPreview, SubtitleRenameResult } from "../../api/types";
 
 export type LibrarySort = "added_desc" | "name_asc";
 
@@ -77,6 +77,10 @@ export const libraryApi = {
       locked_fields: stringList(binding.metadata.nfo_locked_fields),
       manual_values: objectRecord(binding.metadata.nfo_manual_values),
     }),
+  }),
+  renameEpisodeFiles: (id: string, binding: MediaBinding, folder: string, action: "rename" | "restore", selectedVideoPaths: string[]) => apiRequest<EpisodeFileRenameResult>(`/api/v1/media/${id}/episode-files/rename`, {
+    method: "POST",
+    body: JSON.stringify({ action, folder, selected_video_paths: selectedVideoPaths, binding }),
   }),
   subtitlePreview: (id: string, refresh = false) => apiRequest<SubtitleMatchPreview>(`/api/v1/media/${id}/subtitles/preview`, {
     method: "POST",

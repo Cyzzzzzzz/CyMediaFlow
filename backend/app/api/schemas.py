@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from app.domain.artwork import SeasonArtworkExtractionResult
+from app.domain.episode_file_rename import EpisodeFileRenameResult
 from app.domain.filename import FileRole, NamingPreview, NamingPreviewEntry, ParsedMediaInfo
 from app.domain.mapping_suggestion import EpisodeMappingSuggestion
 from app.domain.media import (
@@ -840,6 +841,47 @@ class NfoGenerationRequest(BaseModel):
     overwrite_existing: bool = False
     locked_fields: tuple[str, ...] = Field(default=(), max_length=10000)
     manual_values: dict[str, Any] = Field(default_factory=dict)
+
+
+class EpisodeFileRenameRequest(BaseModel):
+    action: Literal["rename", "restore"]
+    folder: str = Field(min_length=1, max_length=4096)
+    selected_video_paths: tuple[str, ...] = Field(default=(), max_length=100000)
+    binding: ScrapeBindingView
+
+
+class EpisodeFileRenameResultView(BaseModel):
+    media_id: str
+    folder: str
+    action: Literal["rename", "restore"]
+    renamed_files: list[dict[str, str]]
+    skipped_files: list[dict[str, str]]
+    active_folders: list[str]
+    binding: ScrapeBindingView
+
+    @classmethod
+    def from_domain(cls, result: EpisodeFileRenameResult) -> EpisodeFileRenameResultView:
+        binding = ScrapeBindingView.from_domain(result.binding)
+        assert binding is not None
+        return cls(
+            media_id=result.media_id,
+            folder=result.folder,
+            action=result.action,  # type: ignore[arg-type]
+            renamed_files=[
+                {
+                    "source_relative_path": item.source_relative_path,
+                    "target_relative_path": item.target_relative_path,
+                    "kind": item.kind,
+                }
+                for item in result.renamed_files
+            ],
+            skipped_files=[
+                {"relative_path": item.relative_path, "reason": item.reason}
+                for item in result.skipped_files
+            ],
+            active_folders=list(result.active_folders),
+            binding=binding,
+        )
 
 
 class SubtitleMatchPreviewRequest(BaseModel):

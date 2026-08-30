@@ -11,14 +11,17 @@ type Props = {
   excludedFolders: string[];
   renameFolders: string[];
   includedPaths: string[];
+  renamingFolder: string | null;
+  renameError: string | null;
+  renameResult: string | null;
   onSelectionChange: (excludedPaths: string[], includedPaths: string[], excludedFolders: string[]) => void;
-  onRenameFoldersChange: (renameFolders: string[]) => void;
+  onRenameFolder: (folder: string, action: "rename" | "restore", selectedVideoPaths: string[]) => void;
   onRefresh: () => void;
 };
 
 const actionText: Record<NfoPreviewEntry["action"], string> = {
   create: "待生成",
-  rename: "仅改 NFO 名",
+  rename: "待处理",
   unchanged: "已同名",
   review: "默认跳过",
   conflict: "存在冲突",
@@ -37,9 +40,9 @@ const reasonText: Record<string, string> = {
   FOLDER_EXCLUDED: "已手动排除文件夹",
 };
 
-export function NfoPreviewPanel({ preview, loading, error, excludedPaths, excludedFolders, renameFolders, includedPaths, onSelectionChange, onRenameFoldersChange, onRefresh }: Props) {
+export function NfoPreviewPanel({ preview, loading, error, excludedPaths, excludedFolders, renameFolders, includedPaths, renamingFolder, renameError, renameResult, onSelectionChange, onRenameFolder, onRefresh }: Props) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const groups = useMemo(() => groupByFolder(preview?.entries ?? []), [preview]);
 
   useEffect(() => {
@@ -48,7 +51,7 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
     setSelectedPaths(new Set(preview?.entries.filter((entry) => !folderIsExcluded(entry.folder, excludedFolders) && (included.has(entry.target_nfo_relative_path) || (entry.default_selected && !excluded.has(entry.target_nfo_relative_path)))).map((entry) => entry.target_nfo_relative_path) ?? []));
   }, [excludedFolders, excludedPaths, includedPaths, preview]);
 
-  useEffect(() => setCollapsedFolders(new Set()), [preview?.media_id]);
+  useEffect(() => setExpandedFolders(new Set()), [preview?.media_id]);
 
   const commitSelection = (next: Set<string>, explicitExcluded = new Set(excludedPaths), nextExcludedFolders = excludedFolders) => {
     setSelectedPaths(next);
@@ -112,12 +115,14 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
 
   return <div className="naming-preview nfo-preview">
     <div className="naming-preview-head">
-      <div><strong>NFO 文件预览</strong><small>优先显示上次分析缓存；视频文件名保持不变</small></div>
+      <div><strong>剧集文件预览</strong><small>重命名会同步处理视频、NFO 与剧集预览图</small></div>
       <button className="preview-refresh" type="button" onClick={onRefresh} disabled={loading}>
         <ArrowsClockwise size={16} />{loading ? "分析中" : "更新预览"}
       </button>
     </div>
     {error ? <p className="preview-state error"><WarningCircle size={17} />预览失败，请检查映射后重试</p> : null}
+    {renameError ? <p className="preview-state error"><WarningCircle size={17} />{renameError}</p> : null}
+    {renameResult ? <p className="preview-state success"><CheckCircle size={17} weight="fill" />{renameResult}</p> : null}
     {!error && loading && !preview ? <p className="preview-state">正在检查视频与 NFO 配对…</p> : null}
     {preview ? <>
       <div className="preview-counts" aria-label="NFO 预览统计">
@@ -131,17 +136,18 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
         {groups.map(([folder, entries]) => {
           const selectable = entries.filter(canSelect);
           const allSelected = selectable.length > 0 && selectable.every((entry) => selectedPaths.has(entry.target_nfo_relative_path));
-          const collapsed = collapsedFolders.has(folder);
+          const expanded = expandedFolders.has(folder);
+          const collapsed = !expanded;
           const directlyExcluded = excludedFolders.some((candidate) => normalizeFolder(candidate) === normalizeFolder(folder));
           const inheritedExcluded = !directlyExcluded && folderIsExcluded(folder, excludedFolders);
           const usesStandardName = renameFolders.some((candidate) => normalizeFolder(candidate) === normalizeFolder(folder));
           return <section className={`rename-folder ${collapsed ? "collapsed" : ""}`} key={folder}>
             <header className="rename-folder-head">
-              <button className="folder-toggle" type="button" aria-expanded={!collapsed} onClick={() => setCollapsedFolders((current) => toggleSetValue(current, folder))}><FolderSimple size={17} /><strong title={folder}>{folder === "." ? "根目录" : folder}</strong><small>{entries.length} 个文件</small><CaretDown size={15} /></button>
+              <button className="folder-toggle" type="button" aria-expanded={expanded} onClick={() => setExpandedFolders((current) => toggleSetValue(current, folder))}><FolderSimple size={17} /><strong title={folder}>{folder === "." ? "根目录" : folder}</strong><small>{entries.length} 个文件</small><CaretDown size={15} /></button>
               <div className="folder-actions">
-                <label className={`folder-rename ${usesStandardName ? "active" : ""}`} title="仅修改本文件夹内的分集 NFO 名称，不修改视频文件">
-                  <input type="checkbox" checked={usesStandardName} onChange={(event) => onRenameFoldersChange(toggleFolderValue(renameFolders, folder, event.target.checked))} />NFO：标题 SxxExx
-                </label>
+                <button className={`folder-rename ${usesStandardName ? "active" : ""}`} type="button" disabled={renamingFolder !== null || directlyExcluded || inheritedExcluded || (!usesStandardName && selectable.length === 0)} title="按“标题 SxxExx”同步修改本文件夹内已匹配的视频、NFO 与剧集预览图；取消时恢复原名" onClick={() => onRenameFolder(folder, usesStandardName ? "restore" : "rename", selectable.map((entry) => entry.video_relative_path))}>
+                  {renamingFolder !== null && normalizeFolder(renamingFolder) === normalizeFolder(folder) ? "处理中" : usesStandardName ? "取消重命名" : "重命名"}
+                </button>
                 {selectable.length && !directlyExcluded && !inheritedExcluded ? <button className="folder-select" type="button" onClick={() => toggleFolder(entries, !allSelected)}>{allSelected ? "取消本文件夹" : "选择本文件夹"}</button> : null}
                 <button className={`folder-exclude ${directlyExcluded || inheritedExcluded ? "active" : ""}`} type="button" disabled={inheritedExcluded} onClick={() => toggleFolderExclusion(folder, entries)}>{directlyExcluded ? "取消排除" : inheritedExcluded ? "已随上级排除" : "排除并添加 .ignore"}</button>
               </div>
@@ -152,6 +158,7 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
           </section>;
         })}
       </div>
+      <p className="preview-ignore-hint">命名规则：`标题 SxxExx`。重命名后会保留原名清单；点击“取消重命名”即可成组恢复。</p>
       {excludedFolders.length ? <p className="preview-ignore-hint">保存配置时会在手动排除的文件夹内创建 `.ignore`；取消排除不会自动删除已有标记。</p> : null}
     </> : null}
   </div>;
@@ -189,13 +196,6 @@ function toggleSetValue(current: Set<string>, value: string) {
   const next = new Set(current);
   if (next.has(value)) next.delete(value);
   else next.add(value);
-  return next;
-}
-
-function toggleFolderValue(folders: string[], folder: string, enabled: boolean) {
-  const normalized = normalizeFolder(folder);
-  const next = folders.filter((candidate) => normalizeFolder(candidate) !== normalized);
-  if (enabled) next.push(folder);
   return next;
 }
 

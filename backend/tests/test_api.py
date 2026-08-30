@@ -1024,6 +1024,186 @@ def test_nfo_preview_can_opt_in_to_standard_names_per_folder(tmp_path: Path) -> 
     assert second_video.read_bytes() == b"season-two"
 
 
+def test_episode_file_rename_changes_video_nfo_and_artwork_and_can_restore(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    season = media_root / "Example Show" / "Season 1"
+    season.mkdir(parents=True)
+    video = season / "[Group][Example Show][01].mkv"
+    nfo = video.with_suffix(".nfo")
+    artwork = video.with_name(f"{video.stem}-thumb.jpg")
+    video.write_bytes(b"video")
+    nfo.write_text("<episodedetails />", encoding="utf-8")
+    artwork.write_bytes(b"artwork")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+    binding = {
+        "bangumi_id": "12345",
+        "preferred_title": "示例动画",
+        "season_number": 1,
+        "folder_template": "{title} ({year})/Season {season:02}",
+        "filename_template": "{title} S{season:02}E{episode:02}",
+        "metadata": {"bangumi_episode_count": 12},
+        "provider_subjects": [
+            {
+                "provider": "bangumi",
+                "external_id": "12345",
+                "title": "示例动画",
+                "role": "primary",
+            }
+        ],
+    }
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        renamed = client.post(
+            f"/api/v1/media/{media_id}/episode-files/rename",
+            json={
+                "action": "rename",
+                "folder": "Season 1",
+                "selected_video_paths": ["Season 1/[Group][Example Show][01].mkv"],
+                "binding": binding,
+            },
+        )
+        saved_binding = renamed.json()["data"]["binding"]
+        restored = client.post(
+            f"/api/v1/media/{media_id}/episode-files/rename",
+            json={
+                "action": "restore",
+                "folder": "Season 1",
+                "selected_video_paths": [],
+                "binding": saved_binding,
+            },
+        )
+
+    standard_video = season / "示例动画 S01E01.mkv"
+    standard_nfo = season / "示例动画 S01E01.nfo"
+    standard_artwork = season / "示例动画 S01E01-thumb.jpg"
+    assert renamed.status_code == 200
+    assert renamed.json()["data"]["active_folders"] == ["Season 1"]
+    assert {item["kind"] for item in renamed.json()["data"]["renamed_files"]} == {
+        "video",
+        "nfo",
+        "episode_artwork",
+    }
+    assert restored.status_code == 200
+    assert restored.json()["data"]["active_folders"] == []
+    assert video.read_bytes() == b"video"
+    assert nfo.is_file()
+    assert artwork.read_bytes() == b"artwork"
+    assert not standard_video.exists()
+    assert not standard_nfo.exists()
+    assert not standard_artwork.exists()
+
+
+def test_episode_file_rename_rejects_a_target_conflict_without_partial_changes(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    season = media_root / "Example Show" / "Season 1"
+    season.mkdir(parents=True)
+    video = season / "[Group][Example Show][01].mkv"
+    target = season / "示例动画 S01E01.mkv"
+    video.write_bytes(b"source")
+    target.write_bytes(b"target")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+    binding = {
+        "bangumi_id": "12345",
+        "preferred_title": "示例动画",
+        "season_number": 1,
+        "folder_template": "{title} ({year})/Season {season:02}",
+        "filename_template": "{title} S{season:02}E{episode:02}",
+        "metadata": {"bangumi_episode_count": 12},
+    }
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        response = client.post(
+            f"/api/v1/media/{media_id}/episode-files/rename",
+            json={
+                "action": "rename",
+                "folder": "Season 1",
+                "selected_video_paths": ["Season 1/[Group][Example Show][01].mkv"],
+                "binding": binding,
+            },
+        )
+
+    assert response.status_code == 409
+    assert video.read_bytes() == b"source"
+    assert target.read_bytes() == b"target"
+
+
+def test_episode_file_rename_adopts_a_legacy_standard_nfo_for_later_restore(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    season = media_root / "Example Show" / "Season 1"
+    season.mkdir(parents=True)
+    video = season / "[Group][Example Show][01].mkv"
+    legacy_nfo = season / "示例动画 S01E01.nfo"
+    video.write_bytes(b"video")
+    legacy_nfo.write_text("<episodedetails />", encoding="utf-8")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+    binding = {
+        "bangumi_id": "12345",
+        "preferred_title": "示例动画",
+        "season_number": 1,
+        "folder_template": "{title} ({year})/Season {season:02}",
+        "filename_template": "{title} S{season:02}E{episode:02}",
+        "metadata": {
+            "bangumi_episode_count": 12,
+            "nfo_rename_folders": ["Season 1"],
+        },
+    }
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get(
+            "/api/v1/media", params={"include_suggestions": "false"}
+        ).json()["data"][0]["id"]
+        renamed = client.post(
+            f"/api/v1/media/{media_id}/episode-files/rename",
+            json={
+                "action": "rename",
+                "folder": "Season 1",
+                "selected_video_paths": ["Season 1/[Group][Example Show][01].mkv"],
+                "binding": binding,
+            },
+        )
+        restored = client.post(
+            f"/api/v1/media/{media_id}/episode-files/rename",
+            json={
+                "action": "restore",
+                "folder": "Season 1",
+                "binding": renamed.json()["data"]["binding"],
+            },
+        )
+
+    assert renamed.status_code == 200
+    assert restored.status_code == 200
+    assert video.is_file()
+    assert video.with_suffix(".nfo").is_file()
+    assert not legacy_nfo.exists()
+
+
 def test_nfo_generation_renames_only_the_selected_folder_sidecar(tmp_path: Path) -> None:
     media_root = tmp_path / "media"
     season = media_root / "Example Show" / "Season 1"

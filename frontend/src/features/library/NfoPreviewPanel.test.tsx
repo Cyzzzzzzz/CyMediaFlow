@@ -33,25 +33,42 @@ const preview: NfoPreview = {
 };
 
 describe("NfoPreviewPanel", () => {
-  it("keeps video names read-only and supports folder controls", () => {
-    const onSelectionChange = vi.fn();
-    const onRenameFoldersChange = vi.fn();
-    render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRenameFoldersChange={onRenameFoldersChange} onRefresh={vi.fn()} />);
+  const actionProps = {
+    renamingFolder: null,
+    renameError: null,
+    renameResult: null,
+    onRenameFolder: vi.fn(),
+    onRefresh: vi.fn(),
+  };
 
-    expect(screen.getByText("优先显示上次分析缓存；视频文件名保持不变")).toBeTruthy();
+  it("starts collapsed and can immediately rename the matched folder files", () => {
+    const onSelectionChange = vi.fn();
+    const onRenameFolder = vi.fn();
+    render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} {...actionProps} onRenameFolder={onRenameFolder} />);
+
+    expect(screen.getByText("重命名会同步处理视频、NFO 与剧集预览图")).toBeTruthy();
+    const folderToggle = screen.getByRole("button", { name: /raw.*2 个文件/ });
+    expect(folderToggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    expect(onRenameFolder).toHaveBeenCalledWith("raw", "rename", ["raw/[Group][Show][01].mkv"]);
+
+    fireEvent.click(folderToggle);
+    expect(folderToggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText((content) => content.includes("对应视频：[Group][Show][01].mkv"))).toBeTruthy();
     expect(screen.getByText("[Group][Show][01].nfo")).toBeTruthy();
     const checkbox = screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" });
     expect((checkbox as HTMLInputElement).checked).toBe(true);
 
-    const folderToggle = screen.getByRole("button", { name: /raw.*2 个文件/ });
-    fireEvent.click(folderToggle);
-    expect(folderToggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(folderToggle);
     fireEvent.click(screen.getByRole("button", { name: "取消本文件夹" }));
     expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], [], []);
-    fireEvent.click(screen.getByRole("checkbox", { name: "NFO：标题 SxxExx" }));
-    expect(onRenameFoldersChange).toHaveBeenCalledWith(["raw"]);
+  });
+
+  it("offers restore when a folder has a persisted rename backup", () => {
+    const onRenameFolder = vi.fn();
+    render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={["raw"]} includedPaths={[]} onSelectionChange={vi.fn()} {...actionProps} onRenameFolder={onRenameFolder} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "取消重命名" }));
+    expect(onRenameFolder).toHaveBeenCalledWith("raw", "restore", ["raw/[Group][Show][01].mkv"]);
   });
 
   it("allows an existing sidecar to be selected for managed update", () => {
@@ -69,8 +86,9 @@ describe("NfoPreviewPanel", () => {
         action: "unchanged" as const,
       }],
     };
-    render(<NfoPreviewPanel preview={existing} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={vi.fn()} onRenameFoldersChange={vi.fn()} onRefresh={vi.fn()} />);
+    render(<NfoPreviewPanel preview={existing} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={vi.fn()} {...actionProps} />);
 
+    fireEvent.click(screen.getByRole("button", { name: /raw.*1 个文件/ }));
     const checkbox = screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" });
     expect((checkbox as HTMLInputElement).disabled).toBe(false);
     expect((checkbox as HTMLInputElement).checked).toBe(true);
@@ -93,20 +111,22 @@ describe("NfoPreviewPanel", () => {
         warnings: ["EPISODE_SOURCE_NOT_MAPPED"],
       }],
     };
-    render(<NfoPreviewPanel preview={unmapped} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRenameFoldersChange={vi.fn()} onRefresh={vi.fn()} />);
+    render(<NfoPreviewPanel preview={unmapped} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} {...actionProps} />);
 
+    fireEvent.click(screen.getByRole("button", { name: /raw.*1 个文件/ }));
     fireEvent.click(screen.getByRole("button", { name: "跳过此文件" }));
     expect(onSelectionChange).toHaveBeenLastCalledWith(["raw/[Group][Show][01].nfo"], [], []);
   });
 
   it("persists a manual folder exclusion even when the folder contains skipped extras", () => {
     const onSelectionChange = vi.fn();
-    const { rerender } = render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRenameFoldersChange={vi.fn()} onRefresh={vi.fn()} />);
+    const { rerender } = render(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={[]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} {...actionProps} />);
 
     fireEvent.click(screen.getByRole("button", { name: "排除并添加 .ignore" }));
 
     expect(onSelectionChange).toHaveBeenLastCalledWith([], [], ["raw"]);
-    rerender(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={["raw"]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} onRenameFoldersChange={vi.fn()} onRefresh={vi.fn()} />);
+    rerender(<NfoPreviewPanel preview={preview} loading={false} error={false} excludedPaths={[]} excludedFolders={["raw"]} renameFolders={[]} includedPaths={[]} onSelectionChange={onSelectionChange} {...actionProps} />);
+    fireEvent.click(screen.getByRole("button", { name: /raw.*2 个文件/ }));
     expect((screen.getByRole("checkbox", { name: "处理 NFO [Group][Show][01].nfo" }) as HTMLInputElement).disabled).toBe(true);
     expect(screen.getAllByText("已手动排除文件夹")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "取消排除" })).toBeTruthy();

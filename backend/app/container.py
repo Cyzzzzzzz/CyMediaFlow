@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
 )
@@ -44,6 +45,7 @@ class Container:
     nfo_service: NfoPreviewService
     nfo_generation_service: NfoGenerationService
     episode_mapping_suggestion_service: EpisodeMappingSuggestionService
+    episode_file_rename_service: EpisodeFileRenameService
     media_probe: FfprobeMediaProbe
     episode_artwork_generator: FfmpegEpisodeArtworkGenerator
     season_artwork_service: SeasonArtworkExtractionService
@@ -110,6 +112,7 @@ def build_container(settings: Settings) -> Container:
     episode_mapping_suggestion_service = EpisodeMappingSuggestionService(
         catalog, providers, FilenameParser()
     )
+    episode_file_rename_service = EpisodeFileRenameService(catalog, repository, nfo_service)
     media_probe = FfprobeMediaProbe(
         executable=settings.ffprobe_path,
         timeout_seconds=settings.ffprobe_timeout_seconds,
@@ -164,6 +167,7 @@ def build_container(settings: Settings) -> Container:
         nfo_service=nfo_service,
         nfo_generation_service=nfo_generation_service,
         episode_mapping_suggestion_service=episode_mapping_suggestion_service,
+        episode_file_rename_service=episode_file_rename_service,
         media_probe=media_probe,
         episode_artwork_generator=episode_artwork_generator,
         season_artwork_service=season_artwork_service,

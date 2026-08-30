@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
 )
@@ -41,6 +42,10 @@ def get_episode_mapping_suggestion_service(
     request: Request,
 ) -> EpisodeMappingSuggestionService:
     return get_container(request).episode_mapping_suggestion_service
+
+
+def get_episode_file_rename_service(request: Request) -> EpisodeFileRenameService:
+    return get_container(request).episode_file_rename_service
 
 
 def get_provider_artwork_cache(request: Request) -> ProviderArtworkCache:

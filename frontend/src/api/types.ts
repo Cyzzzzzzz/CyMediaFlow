@@ -138,6 +138,12 @@ export type NfoGenerationResult = {
   skipped_files: { relative_path: string; reason: string }[]; generated_episode_count: number;
   probe_warnings: { relative_path: string; reason: string }[];
 };
+export type EpisodeFileRenameResult = {
+  media_id: string; folder: string; action: "rename" | "restore";
+  renamed_files: { source_relative_path: string; target_relative_path: string; kind: "video" | "nfo" | "episode_artwork" }[];
+  skipped_files: { relative_path: string; reason: string }[];
+  active_folders: string[]; binding: MediaBinding;
+};
 export type SubtitleMatchEntry = {
   source_relative_path: string; source_name: string; target_relative_path: string | null;
   target_name: string | null; video_relative_path: string | null; video_name: string | null;

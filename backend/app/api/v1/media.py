@@ -8,6 +8,7 @@ from fastapi import Path as PathParameter
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
+    get_episode_file_rename_service,
     get_episode_mapping_suggestion_service,
     get_media_service,
     get_naming_service,
@@ -21,6 +22,8 @@ from app.api.dependencies import (
 )
 from app.api.response import ok
 from app.api.schemas import (
+    EpisodeFileRenameRequest,
+    EpisodeFileRenameResultView,
     EpisodeMappingSuggestionRequest,
     EpisodeMappingSuggestionView,
     LocalScrapeInfoView,
@@ -44,6 +47,7 @@ from app.api.schemas import (
     SubtitleRenameRequest,
     SubtitleRenameResultView,
 )
+from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
 )
@@ -397,6 +401,28 @@ async def generate_nfo(
     )
     cache.delete(media_id, ("scrape-info", "nfo-preview"))
     return ok(request, NfoGenerationResultView.from_domain(result).model_dump(mode="json"))
+
+
+@router.post("/{media_id}/episode-files/rename")
+def rename_episode_files(
+    media_id: str,
+    body: EpisodeFileRenameRequest,
+    request: Request,
+    service: Annotated[EpisodeFileRenameService, Depends(get_episode_file_rename_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+) -> dict[str, object]:
+    result = service.apply(
+        media_id,
+        action=body.action,
+        folder=body.folder,
+        selected_video_paths=body.selected_video_paths,
+        binding=body.binding.to_domain(media_id),
+    )
+    cache.delete(media_id, ("nfo-preview", "scrape-info", "subtitle-preview"))
+    return ok(
+        request,
+        EpisodeFileRenameResultView.from_domain(result).model_dump(mode="json"),
+    )
 
 
 @router.post("/{media_id}/subtitles/preview")

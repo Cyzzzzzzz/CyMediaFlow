@@ -34,6 +34,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const [candidateLimit, setCandidateLimit] = useState(10);
   const [directId, setDirectId] = useState("");
   const [artworkRevision, setArtworkRevision] = useState(0);
+  const [fileRenameMessage, setFileRenameMessage] = useState<string | null>(null);
   const [form, setForm] = useState<MediaBinding>(item.binding ?? defaults);
   const [detailId, setDetailId] = useState<string | null>(initialPrimary?.external_id ?? (initialProvider === "tmdb" ? nfoTmdbId : nfoBangumiId));
   const effectiveExternalId = detailId ?? (provider === "tmdb" ? (form.tmdb_id || nfoTmdbId) : (form.bangumi_id || nfoBangumiId));
@@ -227,6 +228,21 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const refreshNfoPreview = useMutation({
     mutationFn: () => libraryApi.nfoPreview(item.id, form, true),
     onSuccess: (preview) => client.setQueryData(nfoPreviewKey, preview),
+  });
+  const renameEpisodeFiles = useMutation({
+    mutationFn: ({ folder, action, selectedVideoPaths }: { folder: string; action: "rename" | "restore"; selectedVideoPaths: string[] }) => libraryApi.renameEpisodeFiles(item.id, form, folder, action, selectedVideoPaths),
+    onMutate: () => setFileRenameMessage(null),
+    onSuccess: (result) => {
+      setForm(result.binding);
+      const videoCount = result.renamed_files.filter((entry) => entry.kind === "video").length;
+      const sidecarCount = result.renamed_files.length - videoCount;
+      setFileRenameMessage(`${result.action === "restore" ? "已恢复" : "已重命名"} ${videoCount} 个视频及 ${sidecarCount} 个关联文件`);
+      void client.invalidateQueries({ queryKey: ["library"] });
+      void client.invalidateQueries({ queryKey: ["binding", item.id] });
+      void client.invalidateQueries({ queryKey: ["nfo-preview", item.id] });
+      void client.invalidateQueries({ queryKey: ["scrape-info", item.id] });
+      void client.invalidateQueries({ queryKey: ["subtitle-preview", item.id] });
+    },
   });
   const refreshSubtitlePreview = useMutation({
     mutationFn: () => libraryApi.subtitlePreview(item.id, true),
@@ -436,18 +452,21 @@ export function ScrapeDrawer({ item, onClose }: Props) {
             <Field label="首选标题"><input value={form.preferred_title ?? ""} onChange={(e) => setForm({ ...form, preferred_title: e.target.value || null })} /></Field>
           </div>
         </Accordion>
-        <Accordion icon={<FileText size={21} />} title="NFO 文件" summary={nfoPreview.data ? `${nfoPreview.data.default_selected_count} 项待处理` : "媒体文件保持不变"} open={openSection === "nfo"} onToggle={() => setOpenSection("nfo")}>
-          <p className="notice nfo-safety-notice">不会重命名、移动或覆盖视频。每个文件夹可选择让 NFO 使用“标题 SxxExx”，未选择时仍跟随视频文件名。</p>
+        <Accordion icon={<FileText size={21} />} title="NFO 文件" summary={nfoPreview.data ? `${nfoPreview.data.default_selected_count} 项待处理` : "按文件夹管理剧集名称"} open={openSection === "nfo"} onToggle={() => setOpenSection("nfo")}>
+          <p className="notice nfo-safety-notice">文件夹“重命名”会立即将已匹配的视频、NFO 和剧集预览图统一为“标题 SxxExx”；原名会持久化备份，可随时取消并恢复。目标已存在时不会覆盖。</p>
           <NfoPreviewPanel
             preview={nfoPreview.data}
             loading={nfoPreview.isFetching || refreshNfoPreview.isPending}
             error={nfoPreview.isError}
             excludedPaths={stringList(form.metadata.nfo_excluded_paths)}
             excludedFolders={stringList(form.metadata.nfo_excluded_folders)}
-            renameFolders={stringList(form.metadata.nfo_rename_folders)}
+            renameFolders={fileRenameFolders(form.metadata.episode_file_rename_backups)}
             includedPaths={stringList(form.metadata.nfo_included_paths)}
+            renamingFolder={renameEpisodeFiles.isPending ? renameEpisodeFiles.variables?.folder ?? null : null}
+            renameError={renameEpisodeFiles.isError ? apiErrorMessage(renameEpisodeFiles.error) || "重命名失败；未覆盖已有文件" : null}
+            renameResult={fileRenameMessage}
             onSelectionChange={(excludedPaths, includedPaths, excludedFolders) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_excluded_paths: excludedPaths, nfo_included_paths: includedPaths, nfo_excluded_folders: excludedFolders } }))}
-            onRenameFoldersChange={(renameFolders) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_rename_folders: renameFolders } }))}
+            onRenameFolder={(folder, action, selectedVideoPaths) => renameEpisodeFiles.mutate({ folder, action, selectedVideoPaths })}
             onRefresh={() => refreshNfoPreview.mutate()}
           />
         </Accordion>
@@ -646,6 +665,10 @@ function ScheduledRefreshCard({ schedule, canRefresh, tracksBangumi, running, ru
 function Field({ label, wide = false, children }: { label: string; wide?: boolean; children: ReactNode }) { return <label className={wide ? "wide" : ""}><span>{label}</span>{children}</label>; }
 function stringList(value: unknown) {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value as string[] : emptyPaths;
+}
+function fileRenameFolders(value: unknown) {
+  if (!Array.isArray(value)) return emptyPaths;
+  return value.flatMap((record) => record !== null && typeof record === "object" && typeof (record as { folder?: unknown }).folder === "string" ? [(record as { folder: string }).folder] : []);
 }
 function objectRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};

@@ -19,6 +19,7 @@ vi.mock("./api", () => ({
     generateNfo: vi.fn(),
     suggestEpisodeMapping: vi.fn(),
     nfoPreview: vi.fn(),
+    renameEpisodeFiles: vi.fn(),
     subtitlePreview: vi.fn(),
     renameSubtitles: vi.fn(),
   },
