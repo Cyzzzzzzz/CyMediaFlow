@@ -98,6 +98,7 @@ class NfoGenerationService:
         local_episode_offset: int | None = None,
         excluded_paths: tuple[str, ...] = (),
         excluded_folders: tuple[str, ...] = (),
+        rename_folders: tuple[str, ...] = (),
         included_paths: tuple[str, ...] = (),
         overwrite_existing: bool = False,
         locked_fields: tuple[str, ...] = (),
@@ -188,9 +189,7 @@ class NfoGenerationService:
                 for rule in source_rules
             }
             missing_sources = [
-                source_key
-                for source_key in requested_sources
-                if source_key not in source_cache
+                source_key for source_key in requested_sources if source_key not in source_cache
             ]
             loaded_sources = await asyncio.gather(
                 *(
@@ -209,9 +208,7 @@ class NfoGenerationService:
         episode_by_number: dict[int, ProviderEpisode] = {}
         for episode in episodes:
             current = episode_by_number.get(episode.episode_number)
-            if current is None or (
-                current.episode_type != 0 and episode.episode_type == 0
-            ):
+            if current is None or (current.episode_type != 0 and episode.episode_type == 0):
                 episode_by_number[episode.episode_number] = episode
         excluded = {self._normalize_relative(path) for path in excluded_paths}
         configured_excluded_folders = excluded_folders or self._metadata_string_tuple(
@@ -251,6 +248,12 @@ class NfoGenerationService:
             bangumi_episode_count=(None if mapping.uses_source_rules else len(episodes)),
             episode_source_rules=source_rules,
             excluded_folders=configured_excluded_folders,
+            rename_folders=(
+                rename_folders
+                or self._metadata_string_tuple(
+                    binding.metadata.get("nfo_rename_folders") if binding else None
+                )
+            ),
         )
         regular_entries = [
             entry
@@ -267,6 +270,7 @@ class NfoGenerationService:
         locks = tuple(dict.fromkeys(locked_fields))
         values = manual_values or {}
         documents: dict[Path, str] = {}
+        obsolete_nfo_sources: set[Path] = set()
         skipped: list[NfoGenerationSkip] = []
         probe_warnings: list[NfoGenerationSkip] = []
         artwork_requests: list[tuple[Path, Path, float | None]] = []
@@ -274,9 +278,8 @@ class NfoGenerationService:
         provider_artwork_created: list[Path] = []
         provider_artwork_warnings: list[NfoGenerationSkip] = []
 
-        if (
-            self._remote_artwork is not None
-            and not self._merger.field_locked("series.artwork", locks)
+        if self._remote_artwork is not None and not self._merger.field_locked(
+            "series.artwork", locks
         ):
             provider_requests: list[_RemoteArtworkRequest] = []
             self._queue_provider_artwork(provider_requests, item.root_path, subject)
@@ -349,11 +352,7 @@ class NfoGenerationService:
                 if mapping.uses_source_rules
                 else None
             )
-            if (
-                not mapping.is_single
-                and parsed_episode is None
-                and source_rule is None
-            ):
+            if not mapping.is_single and parsed_episode is None and source_rule is None:
                 skipped.append(
                     NfoGenerationSkip(
                         entry.target_nfo_relative_path,
@@ -361,12 +360,12 @@ class NfoGenerationService:
                     )
                 )
                 continue
-            local_season = configured_season
+            local_season = (
+                configured_season if mapping.adjusts_local_episode else detected_local_season
+            )
             if mapping.uses_source_rules:
                 local_season = (
-                    source_rule.local_season
-                    if source_rule is not None
-                    else detected_local_season
+                    source_rule.local_season if source_rule is not None else detected_local_season
                 )
             if not self._selected(
                 entry, excluded, excluded_folder_set, included, overwrite_existing
@@ -379,7 +378,7 @@ class NfoGenerationService:
                 )
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, reason))
                 continue
-            if entry.action != "create" and not (
+            if entry.action not in {"create", "rename"} and not (
                 overwrite_existing and entry.action == "unchanged"
             ):
                 skipped.append(NfoGenerationSkip(entry.target_nfo_relative_path, "NOT_UPDATEABLE"))
@@ -428,6 +427,11 @@ class NfoGenerationService:
                 continue
             target = self._safe_target(item.root_path, entry.target_nfo_relative_path)
             video_target = self._safe_target(item.root_path, entry.video_relative_path)
+            existing_source = (
+                self._safe_target(item.root_path, entry.source_nfo_relative_path)
+                if entry.action == "rename" and entry.source_nfo_relative_path
+                else None
+            )
             if mapping.is_single:
                 effective_local_episode = mapping.local_episode_number
             elif source_rule is not None and source_rule.local_path is not None:
@@ -445,35 +449,34 @@ class NfoGenerationService:
                 continue
             effective_local_season = configured_season if mapping.is_single else local_season
             episode_scope = f"{effective_local_season}:{effective_local_episode}"
-            season_directories[
-                self._safe_target(item.root_path, entry.folder)
-            ] = effective_local_season
+            season_directories[self._safe_target(item.root_path, entry.folder)] = (
+                effective_local_season
+            )
             season_sources.setdefault(effective_local_season, [])
             if loaded_source not in season_sources[effective_local_season]:
                 season_sources[effective_local_season].append(loaded_source)
             media = None
-            if not self._merger.field_locked(
-                "episodes.media_streams", locks, episode_scope
-            ):
+            if not self._merger.field_locked("episodes.media_streams", locks, episode_scope):
                 probe_result = await self._media_probe.probe(video_target)
                 media = probe_result.media
                 if probe_result.warning_code:
                     probe_warnings.append(
                         NfoGenerationSkip(entry.video_relative_path, probe_result.warning_code)
                     )
-            artwork_locked = self._merger.field_locked(
-                "episodes.artwork", locks, episode_scope
-            )
+            artwork_locked = self._merger.field_locked("episodes.artwork", locks, episode_scope)
             if not artwork_locked and not self._episode_artwork_exists(
                 video_target, target, item.root_path
             ):
+                artwork_nfo = existing_source if existing_source is not None else target
                 episode_image_url = provider_episode.image_url or self._nfo_artwork_urls(
-                    target
+                    artwork_nfo
                 ).get("thumb")
                 if episode_image_url:
-                    relative_hint = video_target.with_name(
-                        f"{video_target.stem}-thumb"
-                    ).relative_to(item.root_path).as_posix()
+                    relative_hint = (
+                        video_target.with_name(f"{video_target.stem}-thumb")
+                        .relative_to(item.root_path)
+                        .as_posix()
+                    )
                     self._queue_remote_artwork(
                         remote_artwork_requests,
                         episode_image_url,
@@ -481,14 +484,11 @@ class NfoGenerationService:
                         f"{video_target.stem}-thumb",
                         relative_hint,
                     )
-                elif (
-                    self._episode_artwork_fallback_enabled
-                    and not self._fallback_preview_exists(
-                        item.root_path,
-                        video_target.parent,
-                        effective_local_season,
-                        item.poster_path,
-                    )
+                elif self._episode_artwork_fallback_enabled and not self._fallback_preview_exists(
+                    item.root_path,
+                    video_target.parent,
+                    effective_local_season,
+                    item.poster_path,
                 ):
                     artwork_target = video_target.with_name(f"{video_target.stem}-thumb.jpg")
                     artwork_requests.append(
@@ -509,7 +509,10 @@ class NfoGenerationService:
                 overwrite_existing=overwrite_existing,
                 locked_fields=locks,
                 manual_values=values,
+                existing_source=existing_source,
             )
+            if existing_source is not None and existing_source != target:
+                obsolete_nfo_sources.add(existing_source)
 
         for directory, local_season in season_directories.items():
             season_target = self._safe_child(item.root_path, directory, "season.nfo")
@@ -519,25 +522,25 @@ class NfoGenerationService:
             season_source = sources_for_season[0]
             season_subject = season_source.subject
             season_episodes = tuple(
-                episode
-                for source in sources_for_season
-                for episode in source.episodes
+                episode for source in sources_for_season for episode in source.episodes
             )
             if not self._merger.field_locked("season.artwork", locks, season_scope):
-                season_image_url = next(
-                    (
-                        episode.season_image_url
-                        for episode in season_episodes
-                        if episode.season_image_url
-                    ),
-                    None,
-                ) or self._nfo_artwork_urls(season_target).get("poster") or season_subject.image_url
-                directory_is_root = (
-                    directory.resolve(strict=False) == item.root_path.resolve(strict=False)
+                season_image_url = (
+                    next(
+                        (
+                            episode.season_image_url
+                            for episode in season_episodes
+                            if episode.season_image_url
+                        ),
+                        None,
+                    )
+                    or self._nfo_artwork_urls(season_target).get("poster")
+                    or season_subject.image_url
                 )
-                season_stem = (
-                    f"season{local_season:02}-poster" if directory_is_root else "poster"
+                directory_is_root = directory.resolve(strict=False) == item.root_path.resolve(
+                    strict=False
                 )
+                season_stem = f"season{local_season:02}-poster" if directory_is_root else "poster"
                 self._queue_remote_artwork(
                     remote_artwork_requests,
                     season_image_url,
@@ -581,7 +584,9 @@ class NfoGenerationService:
                 manual_values=values,
             )
 
-        created, updated = self._write_files_atomically(item.root_path, documents)
+        created, updated = self._write_files_atomically(
+            item.root_path, documents, obsolete_nfo_sources
+        )
         remote_created, remote_warnings, remote_fallbacks = await self._download_artwork(
             item.root_path, remote_artwork_requests
         )
@@ -711,8 +716,7 @@ class NfoGenerationService:
             matches = tuple(
                 episode
                 for episode in episodes
-                if episode.sort_number is not None
-                and abs(episode.sort_number - number) < 0.0001
+                if episode.sort_number is not None and abs(episode.sort_number - number) < 0.0001
             )
             return min(
                 matches,
@@ -885,17 +889,13 @@ class NfoGenerationService:
         def person(value: ProviderPerson, category: str) -> ProviderPerson:
             return replace(
                 value,
-                image_url=self._cached_artwork_reference(
-                    root, category, value.external_id
-                ),
+                image_url=self._cached_artwork_reference(root, category, value.external_id),
             )
 
         characters = tuple(
             replace(
                 character,
-                image_url=self._cached_artwork_reference(
-                    root, "characters", character.external_id
-                ),
+                image_url=self._cached_artwork_reference(root, "characters", character.external_id),
                 actors=tuple(person(actor, "voice-actors") for actor in character.actors),
             )
             for character in subject.characters
@@ -903,9 +903,7 @@ class NfoGenerationService:
         related_subjects = tuple(
             replace(
                 related,
-                image_url=self._cached_artwork_reference(
-                    root, "related", related.external_id
-                ),
+                image_url=self._cached_artwork_reference(root, "related", related.external_id),
             )
             for related in subject.related_subjects
         )
@@ -1082,8 +1080,10 @@ class NfoGenerationService:
         overwrite_existing: bool,
         locked_fields: tuple[str, ...],
         manual_values: dict[str, object],
+        existing_source: Path | None = None,
     ) -> None:
-        if not target.exists():
+        source = target if target.exists() else existing_source
+        if source is None or not source.is_file():
             documents[target] = self._merger.merge(
                 generated_xml,
                 generated_xml,
@@ -1092,11 +1092,11 @@ class NfoGenerationService:
                 manual_values=manual_values,
             )
             return
-        if not overwrite_existing:
+        if target.exists() and not overwrite_existing:
             skipped.append(NfoGenerationSkip(relative, "ALREADY_EXISTS"))
             return
         try:
-            existing_xml = target.read_text(encoding="utf-8-sig")
+            existing_xml = source.read_text(encoding="utf-8-sig")
         except OSError as exc:
             raise NfoGenerationError(
                 "NFO_READ_FAILED", "无法读取已有 NFO，已停止覆盖", {"path": relative}
@@ -1145,9 +1145,7 @@ class NfoGenerationService:
     def _folder_is_excluded(cls, folder: str, excluded_folders: set[str]) -> bool:
         normalized = cls._normalize_folder(folder)
         return any(
-            excluded == "."
-            or normalized == excluded
-            or normalized.startswith(f"{excluded}/")
+            excluded == "." or normalized == excluded or normalized.startswith(f"{excluded}/")
             for excluded in excluded_folders
         )
 
@@ -1173,11 +1171,14 @@ class NfoGenerationService:
 
     @staticmethod
     def _write_files_atomically(
-        root: Path, documents: dict[Path, str]
+        root: Path,
+        documents: dict[Path, str],
+        obsolete_sources: set[Path] | None = None,
     ) -> tuple[list[Path], list[Path]]:
         created: list[Path] = []
         updated: list[Path] = []
         backups: dict[Path, bytes] = {}
+        removed_sources: dict[Path, bytes] = {}
         temporary: set[Path] = set()
         try:
             for path, content in sorted(documents.items(), key=lambda item: item[0].as_posix()):
@@ -1197,6 +1198,11 @@ class NfoGenerationService:
                 os.replace(temp, path)
                 temporary.discard(temp)
                 updated.append(path)
+            for source in sorted(obsolete_sources or (), key=lambda path: path.as_posix()):
+                if source in documents or not source.exists():
+                    continue
+                removed_sources[source] = source.read_bytes()
+                source.unlink()
         except OSError as exc:
             for path in reversed(created):
                 with suppress(OSError):
@@ -1208,6 +1214,13 @@ class NfoGenerationService:
                     )
                     rollback.write_bytes(backups[path])
                     os.replace(rollback, path)
+            for source, content in removed_sources.items():
+                with suppress(OSError):
+                    rollback = source.with_name(
+                        f".{source.name}.cymediaflow-rollback-{uuid4().hex}.tmp"
+                    )
+                    rollback.write_bytes(content)
+                    os.replace(rollback, source)
             for path in temporary:
                 with suppress(OSError):
                     path.unlink()

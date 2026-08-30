@@ -9,8 +9,10 @@ type Props = {
   error: boolean;
   excludedPaths: string[];
   excludedFolders: string[];
+  renameFolders: string[];
   includedPaths: string[];
   onSelectionChange: (excludedPaths: string[], includedPaths: string[], excludedFolders: string[]) => void;
+  onRenameFoldersChange: (renameFolders: string[]) => void;
   onRefresh: () => void;
 };
 
@@ -35,7 +37,7 @@ const reasonText: Record<string, string> = {
   FOLDER_EXCLUDED: "已手动排除文件夹",
 };
 
-export function NfoPreviewPanel({ preview, loading, error, excludedPaths, excludedFolders, includedPaths, onSelectionChange, onRefresh }: Props) {
+export function NfoPreviewPanel({ preview, loading, error, excludedPaths, excludedFolders, renameFolders, includedPaths, onSelectionChange, onRenameFoldersChange, onRefresh }: Props) {
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const groups = useMemo(() => groupByFolder(preview?.entries ?? []), [preview]);
@@ -132,10 +134,14 @@ export function NfoPreviewPanel({ preview, loading, error, excludedPaths, exclud
           const collapsed = collapsedFolders.has(folder);
           const directlyExcluded = excludedFolders.some((candidate) => normalizeFolder(candidate) === normalizeFolder(folder));
           const inheritedExcluded = !directlyExcluded && folderIsExcluded(folder, excludedFolders);
+          const usesStandardName = renameFolders.some((candidate) => normalizeFolder(candidate) === normalizeFolder(folder));
           return <section className={`rename-folder ${collapsed ? "collapsed" : ""}`} key={folder}>
             <header className="rename-folder-head">
               <button className="folder-toggle" type="button" aria-expanded={!collapsed} onClick={() => setCollapsedFolders((current) => toggleSetValue(current, folder))}><FolderSimple size={17} /><strong title={folder}>{folder === "." ? "根目录" : folder}</strong><small>{entries.length} 个文件</small><CaretDown size={15} /></button>
               <div className="folder-actions">
+                <label className={`folder-rename ${usesStandardName ? "active" : ""}`} title="仅修改本文件夹内的分集 NFO 名称，不修改视频文件">
+                  <input type="checkbox" checked={usesStandardName} onChange={(event) => onRenameFoldersChange(toggleFolderValue(renameFolders, folder, event.target.checked))} />NFO：标题 SxxExx
+                </label>
                 {selectable.length && !directlyExcluded && !inheritedExcluded ? <button className="folder-select" type="button" onClick={() => toggleFolder(entries, !allSelected)}>{allSelected ? "取消本文件夹" : "选择本文件夹"}</button> : null}
                 <button className={`folder-exclude ${directlyExcluded || inheritedExcluded ? "active" : ""}`} type="button" disabled={inheritedExcluded} onClick={() => toggleFolderExclusion(folder, entries)}>{directlyExcluded ? "取消排除" : inheritedExcluded ? "已随上级排除" : "排除并添加 .ignore"}</button>
               </div>
@@ -183,6 +189,13 @@ function toggleSetValue(current: Set<string>, value: string) {
   const next = new Set(current);
   if (next.has(value)) next.delete(value);
   else next.add(value);
+  return next;
+}
+
+function toggleFolderValue(folders: string[], folder: string, enabled: boolean) {
+  const normalized = normalizeFolder(folder);
+  const next = folders.filter((candidate) => normalizeFolder(candidate) !== normalized);
+  if (enabled) next.push(folder);
   return next;
 }
 

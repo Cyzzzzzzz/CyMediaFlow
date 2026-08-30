@@ -1,5 +1,5 @@
 import { apiRequest } from "../../api/client";
-import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding, ScheduledRefresh, SeasonArtworkExtractionResult } from "../../api/types";
+import type { CachedMetadataSearch, EpisodeMappingSuggestion, LocalScrapeInfo, MediaBinding, MediaItem, MetadataCandidate, NamingPreview, NfoGenerationResult, NfoPreview, ProviderEpisode, ProviderSubjectBinding, ScheduledRefresh, SeasonArtworkExtractionResult, SubtitleMatchPreview, SubtitleRenameResult } from "../../api/types";
 
 export type LibrarySort = "added_desc" | "name_asc";
 
@@ -39,6 +39,7 @@ export const libraryApi = {
     return apiRequest<NfoPreview>(`/api/v1/media/${id}/nfo-preview`, {
       method: "POST",
       body: JSON.stringify({
+        preferred_title: binding.preferred_title,
         season_number: binding.season_number,
         episode_offset: binding.episode_offset,
         episode_mapping_mode: episodeMappingMode(binding),
@@ -50,6 +51,7 @@ export const libraryApi = {
         bangumi_episode_count: typeof episodeCount === "number" ? episodeCount : null,
         episode_source_rules: binding.episode_source_rules,
         excluded_folders: stringList(binding.metadata.nfo_excluded_folders),
+        rename_folders: stringList(binding.metadata.nfo_rename_folders),
         refresh,
       }),
     });
@@ -69,11 +71,20 @@ export const libraryApi = {
       local_episode_offset: metadataInteger(binding, "nfo_local_episode_offset", 0),
       excluded_paths: stringList(binding.metadata.nfo_excluded_paths),
       excluded_folders: stringList(binding.metadata.nfo_excluded_folders),
+      rename_folders: stringList(binding.metadata.nfo_rename_folders),
       included_paths: stringList(binding.metadata.nfo_included_paths),
       overwrite_existing: true,
       locked_fields: stringList(binding.metadata.nfo_locked_fields),
       manual_values: objectRecord(binding.metadata.nfo_manual_values),
     }),
+  }),
+  subtitlePreview: (id: string, refresh = false) => apiRequest<SubtitleMatchPreview>(`/api/v1/media/${id}/subtitles/preview`, {
+    method: "POST",
+    body: JSON.stringify({ refresh }),
+  }),
+  renameSubtitles: (id: string) => apiRequest<SubtitleRenameResult>(`/api/v1/media/${id}/subtitles/rename`, {
+    method: "POST",
+    body: JSON.stringify({ confirmed: true }),
   }),
 };
 

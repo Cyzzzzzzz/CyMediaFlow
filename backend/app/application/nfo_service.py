@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from app.domain.media_classification import classify_media
 from app.domain.nfo import NfoPreview, NfoPreviewEntry
 
 RESERVED_NFO_NAMES = {"tvshow.nfo", "season.nfo"}
+INVALID_NFO_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 class NfoPreviewService:
@@ -30,6 +32,7 @@ class NfoPreviewService:
         self,
         media_id: str,
         *,
+        preferred_title: str | None = None,
         season_number: int | None = None,
         episode_offset: int | None = None,
         episode_mapping_mode: str | None = None,
@@ -41,6 +44,7 @@ class NfoPreviewService:
         bangumi_episode_count: int | None = None,
         episode_source_rules: tuple[EpisodeSourceRule, ...] | None = None,
         excluded_folders: tuple[str, ...] | None = None,
+        rename_folders: tuple[str, ...] | None = None,
     ) -> NfoPreview:
         item = self._catalog.get_media(media_id)
         if item is None:
@@ -83,6 +87,22 @@ class NfoPreviewService:
                 )
             )
         }
+        effective_rename_folders = {
+            self._normalize_folder(folder)
+            for folder in (
+                rename_folders
+                if rename_folders is not None
+                else self._metadata_string_tuple(
+                    binding.metadata.get("nfo_rename_folders") if binding else None
+                )
+            )
+        }
+        effective_title = self._safe_filename(
+            preferred_title
+            or (binding.preferred_title if binding else None)
+            or item.title
+            or item.folder_name
+        )
         if mapping.uses_source_rules:
             effective_bangumi_id = effective_bangumi_id or (
                 "multi-source" if source_rules else None
@@ -102,12 +122,23 @@ class NfoPreviewService:
         ]
         regular_video_count = sum(
             classify_media(relative, parsed) == "regular"
-            and not self._folder_is_excluded(
-                relative.parent.as_posix(), effective_excluded_folders
-            )
+            and not self._folder_is_excluded(relative.parent.as_posix(), effective_excluded_folders)
             for _, relative, parsed in parsed_videos
         )
         single_mapping_valid = mapping.is_single and regular_video_count == 1
+        target_by_video = {
+            relative.as_posix().casefold(): self._target_nfo_relative(
+                relative,
+                parsed,
+                configured_season,
+                mapping,
+                source_rules,
+                single_mapping_valid,
+                effective_rename_folders,
+                effective_title,
+            )
+            for _, relative, parsed in parsed_videos
+        }
         video_episode_counts = Counter(
             key
             for _, relative, parsed in parsed_videos
@@ -129,10 +160,7 @@ class NfoPreviewService:
         nfo_by_path = {
             path.relative_to(item.root_path).as_posix().casefold(): path for path in nfo_files
         }
-        target_keys = {
-            path.relative_to(item.root_path).with_suffix(".nfo").as_posix().casefold()
-            for path in videos
-        }
+        target_keys = {target.as_posix().casefold() for target in target_by_video.values()}
         alternative_nfos: dict[tuple[str, int, int], list[Path]] = defaultdict(list)
         for nfo_path in nfo_files:
             relative = nfo_path.relative_to(item.root_path)
@@ -145,20 +173,25 @@ class NfoPreviewService:
             if key is not None:
                 alternative_nfos[key].append(nfo_path)
 
-        target_counts = Counter(
-            path.relative_to(item.root_path).with_suffix(".nfo").as_posix().casefold()
-            for path in videos
-        )
+        target_counts = Counter(target.as_posix().casefold() for target in target_by_video.values())
         entries: list[NfoPreviewEntry] = []
         for _, relative, parsed in parsed_videos:
             category = classify_media(relative, parsed)
-            target_relative = relative.with_suffix(".nfo")
+            target_relative = target_by_video[relative.as_posix().casefold()]
             target_key = target_relative.as_posix().casefold()
+            sidecar_key = relative.with_suffix(".nfo").as_posix().casefold()
             warnings = list(parsed.warnings)
             if category != "regular":
                 warnings.append("NON_BANGUMI_CONTENT")
 
-            source_nfo: Path | None = nfo_by_path.get(target_key)
+            direct_target = nfo_by_path.get(target_key)
+            direct_sidecar = nfo_by_path.get(sidecar_key)
+            duplicate_direct_nfo = (
+                direct_target is not None
+                and direct_sidecar is not None
+                and direct_target != direct_sidecar
+            )
+            source_nfo: Path | None = direct_target or direct_sidecar
             candidates: list[Path] = []
             episode_key = self._episode_key(
                 relative,
@@ -171,8 +204,11 @@ class NfoPreviewService:
                     mapping.provider_episode_number if single_mapping_valid else None
                 ),
             )
-            if source_nfo is not None:
-                action = "unchanged"
+            if duplicate_direct_nfo:
+                action = "conflict"
+                warnings.append("TARGET_NFO_CONFLICT")
+            elif source_nfo is not None:
+                action = "unchanged" if source_nfo == direct_target else "rename"
             elif target_counts[target_key] > 1:
                 action = "conflict"
                 warnings.append("TARGET_NFO_CONFLICT")
@@ -192,9 +228,7 @@ class NfoPreviewService:
 
             mapped_episode = episode_key[2] if episode_key else None
             parsed_local_episode = self._parsed_episode(parsed)
-            parsed_local_season = resolve_local_season(
-                relative, parsed.season, configured_season
-            )
+            parsed_local_season = resolve_local_season(relative, parsed.season, configured_season)
             source_rule_mapped = not mapping.uses_source_rules or (
                 self._matching_source_rule(
                     source_rules,
@@ -282,9 +316,7 @@ class NfoPreviewService:
             season = season_override if season_override is not None else configured_season
             return relative_path.parent.as_posix().casefold(), season, episode_override
         episode = NfoPreviewService._parsed_episode(parsed)
-        detected_season = resolve_local_season(
-            relative_path, parsed.season, configured_season
-        )
+        detected_season = resolve_local_season(relative_path, parsed.season, configured_season)
         source_rule = NfoPreviewService._matching_source_rule(
             source_rules,
             relative_path.as_posix(),
@@ -338,6 +370,76 @@ class NfoPreviewService:
         if parsed.episode_start is not None:
             return parsed.episode_start
         return parsed.absolute_episode_start
+
+    @classmethod
+    def _target_nfo_relative(
+        cls,
+        relative_path: Path,
+        parsed: ParsedMediaInfo,
+        configured_season: int,
+        mapping,
+        source_rules: tuple[EpisodeSourceRule, ...],
+        single_mapping_valid: bool,
+        rename_folders: set[str],
+        preferred_title: str,
+    ) -> Path:
+        if cls._normalize_folder(relative_path.parent.as_posix()) not in rename_folders:
+            return relative_path.with_suffix(".nfo")
+        coordinates = cls._local_coordinates(
+            relative_path,
+            parsed,
+            configured_season,
+            mapping,
+            source_rules,
+            single_mapping_valid,
+        )
+        if coordinates is None:
+            return relative_path.with_suffix(".nfo")
+        season, episode = coordinates
+        if season < 0 or episode < 0:
+            return relative_path.with_suffix(".nfo")
+        return relative_path.with_name(f"{preferred_title} S{season:02d}E{episode:02d}.nfo")
+
+    @classmethod
+    def _local_coordinates(
+        cls,
+        relative_path: Path,
+        parsed: ParsedMediaInfo,
+        configured_season: int,
+        mapping,
+        source_rules: tuple[EpisodeSourceRule, ...],
+        single_mapping_valid: bool,
+    ) -> tuple[int, int] | None:
+        if mapping.is_single and single_mapping_valid:
+            return configured_season, mapping.local_episode_number
+        episode = cls._parsed_episode(parsed)
+        detected_season = resolve_local_season(relative_path, parsed.season, configured_season)
+        if mapping.uses_source_rules:
+            rule = cls._matching_source_rule(
+                source_rules,
+                relative_path.as_posix(),
+                detected_season,
+                episode,
+            )
+            if rule is None:
+                return None
+            return (
+                rule.local_season,
+                rule.local_episode_start if rule.local_path is not None else (episode or 0),
+            )
+        if episode is None:
+            return None
+        local_episode = episode + (
+            mapping.local_episode_offset if mapping.adjusts_local_episode else 0
+        )
+        local_season = configured_season if mapping.adjusts_local_episode else detected_season
+        return local_season, local_episode
+
+    @staticmethod
+    def _safe_filename(value: str) -> str:
+        value = INVALID_NFO_FILENAME.sub(" ", value)
+        value = re.sub(r"\s+", " ", value).strip(" .")
+        return value or "Untitled"
 
     @staticmethod
     def _episode_count(request_value: int | None, stored_value: object) -> int | None:
@@ -402,8 +504,6 @@ class NfoPreviewService:
     def _folder_is_excluded(cls, folder: str, excluded_folders: set[str]) -> bool:
         normalized = cls._normalize_folder(folder)
         return any(
-            excluded == "."
-            or normalized == excluded
-            or normalized.startswith(f"{excluded}/")
+            excluded == "." or normalized == excluded or normalized.startswith(f"{excluded}/")
             for excluded in excluded_folders
         )

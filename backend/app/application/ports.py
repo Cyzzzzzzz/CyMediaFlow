@@ -19,6 +19,8 @@ class MediaCatalogPort(Protocol):
 
     def list_nfo_files(self, media_id: str) -> tuple[Path, ...]: ...
 
+    def list_subtitle_files(self, media_id: str) -> tuple[Path, ...]: ...
+
 
 class BindingRepositoryPort(Protocol):
     def get(self, media_id: str) -> ScrapeBinding | None: ...
@@ -72,9 +74,7 @@ class ResultCachePort(Protocol):
         parameters: Mapping[str, object] | None = None,
     ) -> None: ...
 
-    def delete(
-        self, media_id: str, categories: Iterable[str] | None = None
-    ) -> None: ...
+    def delete(self, media_id: str, categories: Iterable[str] | None = None) -> None: ...
 
 
 class RemoteArtworkDownloaderPort(Protocol):

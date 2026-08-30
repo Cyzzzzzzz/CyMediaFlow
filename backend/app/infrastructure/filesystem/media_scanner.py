@@ -21,6 +21,7 @@ VIDEO_EXTENSIONS = {
     ".flv",
     ".webm",
 }
+SUBTITLE_EXTENSIONS = {".ass", ".ssa", ".srt", ".vtt", ".sub", ".idx", ".sup"}
 YEAR_SUFFIX = re.compile(r"\s*\((19\d{2}|20\d{2})\)\s*$")
 SEASON_DIRECTORY = re.compile(r"^Season\s+(\d+)$", re.IGNORECASE)
 
@@ -65,6 +66,19 @@ class FileSystemMediaCatalog:
                 path
                 for path in item.root_path.rglob("*")
                 if path.is_file() and path.suffix.casefold() == ".nfo"
+            )
+        )
+
+    def list_subtitle_files(self, media_id: str) -> tuple[Path, ...]:
+        item = self.get_media(media_id)
+        if item is None:
+            return ()
+        self._assert_within_allowed(item.root_path.resolve(strict=False))
+        return tuple(
+            sorted(
+                path
+                for path in item.root_path.rglob("*")
+                if path.is_file() and path.suffix.casefold() in SUBTITLE_EXTENSIONS
             )
         )
 

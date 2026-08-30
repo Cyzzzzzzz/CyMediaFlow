@@ -138,6 +138,24 @@ export type NfoGenerationResult = {
   skipped_files: { relative_path: string; reason: string }[]; generated_episode_count: number;
   probe_warnings: { relative_path: string; reason: string }[];
 };
+export type SubtitleMatchEntry = {
+  source_relative_path: string; source_name: string; target_relative_path: string | null;
+  target_name: string | null; video_relative_path: string | null; video_name: string | null;
+  folder: string; season_number: number | null; episode_number: number | null;
+  language: string | null; language_tag: string | null;
+  status: "rename" | "unchanged" | "review" | "conflict"; default_selected: boolean;
+  reason: string | null; warnings: string[];
+};
+export type SubtitleMatchPreview = {
+  media_id: string; operation_mode: "read_only_preview"; total: number; rename_count: number;
+  unchanged_count: number; review_count: number; conflict_count: number;
+  default_selected_count: number; entries: SubtitleMatchEntry[];
+};
+export type SubtitleRenameResult = {
+  media_id: string;
+  renamed_files: { source_relative_path: string; target_relative_path: string }[];
+  skipped_files: { relative_path: string; reason: string }[];
+};
 export type SeasonArtworkExtractionResult = {
   media_id: string; season_number: number; target_count: number; created_files: string[];
   skipped_files: { relative_path: string; reason: string }[];

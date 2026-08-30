@@ -139,6 +139,7 @@ class ScheduledRefreshService:
                     local_episode_offset=self._metadata_int(binding, "nfo_local_episode_offset", 0),
                     excluded_paths=self._metadata_strings(binding, "nfo_excluded_paths"),
                     excluded_folders=self._metadata_strings(binding, "nfo_excluded_folders"),
+                    rename_folders=self._metadata_strings(binding, "nfo_rename_folders"),
                     included_paths=self._metadata_strings(binding, "nfo_included_paths"),
                     overwrite_existing=True,
                     locked_fields=self._metadata_strings(binding, "nfo_locked_fields"),

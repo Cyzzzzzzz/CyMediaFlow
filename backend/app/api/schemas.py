@@ -24,6 +24,7 @@ from app.domain.media import (
 )
 from app.domain.nfo import NfoGenerationResult, NfoPreview, NfoPreviewEntry
 from app.domain.scrape import LocalScrapeInfo
+from app.domain.subtitle import SubtitleMatchEntry, SubtitleMatchPreview, SubtitleRenameResult
 
 
 class ExternalIdentityView(BaseModel):
@@ -88,17 +89,9 @@ class EpisodeSourceRuleView(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> EpisodeSourceRuleView:
-        if (
-            self.local_path is not None
-            and self.local_episode_end != self.local_episode_start
-        ):
-            raise ValueError(
-                "a local_path rule must map to exactly one local episode"
-            )
-        if (
-            self.local_episode_end is not None
-            and self.local_episode_end < self.local_episode_start
-        ):
+        if self.local_path is not None and self.local_episode_end != self.local_episode_start:
+            raise ValueError("a local_path rule must map to exactly one local episode")
+        if self.local_episode_end is not None and self.local_episode_end < self.local_episode_start:
             raise ValueError("local_episode_end must be greater than or equal to start")
         return self
 
@@ -146,9 +139,7 @@ class EpisodeMappingSuggestionView(BaseModel):
     warnings: list[str]
 
     @classmethod
-    def from_domain(
-        cls, suggestion: EpisodeMappingSuggestion
-    ) -> EpisodeMappingSuggestionView:
+    def from_domain(cls, suggestion: EpisodeMappingSuggestion) -> EpisodeMappingSuggestionView:
         return cls(
             rules=[EpisodeSourceRuleView.from_domain(rule) for rule in suggestion.rules],
             detected_ranges=[
@@ -264,12 +255,9 @@ class ScrapeBindingView(BaseModel):
                 for subject in binding.provider_subjects
             ],
             episode_source_rules=[
-                EpisodeSourceRuleView.from_domain(rule)
-                for rule in binding.episode_source_rules
+                EpisodeSourceRuleView.from_domain(rule) for rule in binding.episode_source_rules
             ],
-            scheduled_refresh=ScheduledRefreshView.from_domain(
-                binding.scheduled_refresh
-            ),
+            scheduled_refresh=ScheduledRefreshView.from_domain(binding.scheduled_refresh),
         )
 
     def to_domain(self, media_id: str) -> ScrapeBinding:
@@ -525,9 +513,7 @@ class MetadataCandidateView(BaseModel):
             platform=candidate.platform,
             total_episode_count=candidate.total_episode_count,
             infobox=[ProviderInfoboxItemView.from_domain(item) for item in candidate.infobox],
-            rating=(
-                ProviderRatingView.from_domain(candidate.rating) if candidate.rating else None
-            ),
+            rating=(ProviderRatingView.from_domain(candidate.rating) if candidate.rating else None),
             meta_tags=list(candidate.meta_tags),
             tags=[ProviderTagView.from_domain(tag) for tag in candidate.tags],
             persons=[ProviderPersonView.from_domain(person) for person in candidate.persons],
@@ -632,9 +618,7 @@ class SettingsUpdate(BaseModel):
         if values is None:
             return None
         normalized = list(
-            dict.fromkeys(
-                value.strip().replace("\\", "/") for value in values if value.strip()
-            )
+            dict.fromkeys(value.strip().replace("\\", "/") for value in values if value.strip())
         )
         if any(len(value) > 500 for value in normalized):
             raise ValueError("单条忽略目录规则不能超过 500 个字符")
@@ -758,6 +742,7 @@ class NamingPreviewView(BaseModel):
 
 
 class NfoPreviewRequest(BaseModel):
+    preferred_title: str | None = Field(default=None, max_length=500)
     season_number: int | None = Field(default=None, ge=0, le=99)
     episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
     episode_mapping_mode: Literal["auto", "manual", "single", "segments"] | None = None
@@ -769,6 +754,7 @@ class NfoPreviewRequest(BaseModel):
     bangumi_episode_count: int | None = Field(default=None, ge=0, le=100000)
     episode_source_rules: tuple[EpisodeSourceRuleView, ...] | None = None
     excluded_folders: tuple[str, ...] | None = Field(default=None, max_length=10000)
+    rename_folders: tuple[str, ...] | None = Field(default=None, max_length=10000)
     refresh: bool = False
 
 
@@ -849,10 +835,106 @@ class NfoGenerationRequest(BaseModel):
     local_episode_offset: int | None = Field(default=None, ge=-10000, le=10000)
     excluded_paths: tuple[str, ...] = Field(default=(), max_length=100000)
     excluded_folders: tuple[str, ...] = Field(default=(), max_length=10000)
+    rename_folders: tuple[str, ...] = Field(default=(), max_length=10000)
     included_paths: tuple[str, ...] = Field(default=(), max_length=100000)
     overwrite_existing: bool = False
     locked_fields: tuple[str, ...] = Field(default=(), max_length=10000)
     manual_values: dict[str, Any] = Field(default_factory=dict)
+
+
+class SubtitleMatchPreviewRequest(BaseModel):
+    refresh: bool = False
+
+
+class SubtitleMatchEntryView(BaseModel):
+    source_relative_path: str
+    source_name: str
+    target_relative_path: str | None
+    target_name: str | None
+    video_relative_path: str | None
+    video_name: str | None
+    folder: str
+    season_number: int | None
+    episode_number: int | None
+    language: str | None
+    language_tag: str | None
+    status: Literal["rename", "unchanged", "review", "conflict"]
+    default_selected: bool
+    reason: str | None
+    warnings: tuple[str, ...]
+
+    @classmethod
+    def from_domain(cls, entry: SubtitleMatchEntry) -> SubtitleMatchEntryView:
+        return cls(
+            source_relative_path=entry.source_relative_path,
+            source_name=entry.source_name,
+            target_relative_path=entry.target_relative_path,
+            target_name=entry.target_name,
+            video_relative_path=entry.video_relative_path,
+            video_name=entry.video_name,
+            folder=entry.folder,
+            season_number=entry.season_number,
+            episode_number=entry.episode_number,
+            language=entry.language,
+            language_tag=entry.language_tag,
+            status=entry.status,  # type: ignore[arg-type]
+            default_selected=entry.default_selected,
+            reason=entry.reason,
+            warnings=entry.warnings,
+        )
+
+
+class SubtitleMatchPreviewView(BaseModel):
+    media_id: str
+    operation_mode: Literal["read_only_preview"]
+    total: int
+    rename_count: int
+    unchanged_count: int
+    review_count: int
+    conflict_count: int
+    default_selected_count: int
+    entries: list[SubtitleMatchEntryView]
+
+    @classmethod
+    def from_domain(cls, preview: SubtitleMatchPreview) -> SubtitleMatchPreviewView:
+        return cls(
+            media_id=preview.media_id,
+            operation_mode="read_only_preview",
+            total=preview.total,
+            rename_count=preview.rename_count,
+            unchanged_count=preview.unchanged_count,
+            review_count=preview.review_count,
+            conflict_count=preview.conflict_count,
+            default_selected_count=preview.default_selected_count,
+            entries=[SubtitleMatchEntryView.from_domain(entry) for entry in preview.entries],
+        )
+
+
+class SubtitleRenameRequest(BaseModel):
+    confirmed: bool = False
+
+
+class SubtitleRenameResultView(BaseModel):
+    media_id: str
+    renamed_files: list[dict[str, str]]
+    skipped_files: list[dict[str, str]]
+
+    @classmethod
+    def from_domain(cls, result: SubtitleRenameResult) -> SubtitleRenameResultView:
+        return cls(
+            media_id=result.media_id,
+            renamed_files=[
+                {
+                    "source_relative_path": item.source_relative_path,
+                    "target_relative_path": item.target_relative_path,
+                }
+                for item in result.renamed_files
+            ],
+            skipped_files=[
+                {"relative_path": item.relative_path, "reason": item.reason}
+                for item in result.skipped_files
+            ],
+        )
 
 
 class NfoGenerationSkipView(BaseModel):

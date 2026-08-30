@@ -19,6 +19,8 @@ vi.mock("./api", () => ({
     generateNfo: vi.fn(),
     suggestEpisodeMapping: vi.fn(),
     nfoPreview: vi.fn(),
+    subtitlePreview: vi.fn(),
+    renameSubtitles: vi.fn(),
   },
 }));
 
@@ -127,6 +129,14 @@ describe("ScrapeDrawer segmented mapping", () => {
       create_count: 0, rename_count: 0, unchanged_count: 0, review_count: 0,
       conflict_count: 0, default_selected_count: 0, default_skipped_count: 0, entries: [],
     });
+    vi.mocked(libraryApi.subtitlePreview).mockResolvedValue({
+      media_id: "anime-1", operation_mode: "read_only_preview", total: 0,
+      rename_count: 0, unchanged_count: 0, review_count: 0, conflict_count: 0,
+      default_selected_count: 0, entries: [],
+    });
+    vi.mocked(libraryApi.renameSubtitles).mockResolvedValue({
+      media_id: "anime-1", renamed_files: [], skipped_files: [],
+    });
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
@@ -180,6 +190,19 @@ describe("ScrapeDrawer segmented mapping", () => {
     expect(screen.getByText(/上一次搜索“上次搜索词”/)).toBeTruthy();
     expect((screen.getByLabelText("搜索 bangumi") as HTMLInputElement).value).toBe("上次搜索词");
     expect(libraryApi.candidates).not.toHaveBeenCalled();
+  });
+
+  it("loads the cached subtitle preview only after opening the subtitle section", async () => {
+    renderDrawer();
+    await screen.findByText("主作品");
+
+    expect(libraryApi.subtitlePreview).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("字幕匹配"));
+    expect(await screen.findByText("未发现可处理的外置字幕文件。")).toBeTruthy();
+    await waitFor(() => expect(libraryApi.subtitlePreview).toHaveBeenCalledWith("anime-1", false));
+
+    fireEvent.click(screen.getByRole("button", { name: "更新预览" }));
+    await waitFor(() => expect(libraryApi.subtitlePreview).toHaveBeenCalledWith("anime-1", true));
   });
 
   it("shows the drawer sections in the requested workflow order", async () => {

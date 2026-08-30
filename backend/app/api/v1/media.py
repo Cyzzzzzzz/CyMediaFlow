@@ -17,6 +17,7 @@ from app.api.dependencies import (
     get_result_cache,
     get_scheduled_refresh_service,
     get_season_artwork_service,
+    get_subtitle_service,
 )
 from app.api.response import ok
 from app.api.schemas import (
@@ -38,6 +39,10 @@ from app.api.schemas import (
     ScheduledRefreshView,
     ScrapeBindingView,
     SeasonArtworkExtractionResultView,
+    SubtitleMatchPreviewRequest,
+    SubtitleMatchPreviewView,
+    SubtitleRenameRequest,
+    SubtitleRenameResultView,
 )
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
@@ -49,6 +54,7 @@ from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
 from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
+from app.application.subtitle_service import SubtitleMatchService
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
 router = APIRouter(prefix="/media", tags=["media"])
@@ -148,9 +154,7 @@ async def extract_season_episode_artwork(
     media_id: str,
     season_number: Annotated[int, PathParameter(ge=0, le=99)],
     request: Request,
-    service: Annotated[
-        SeasonArtworkExtractionService, Depends(get_season_artwork_service)
-    ],
+    service: Annotated[SeasonArtworkExtractionService, Depends(get_season_artwork_service)],
     cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
     result = await service.extract(media_id, season_number)
@@ -192,9 +196,7 @@ async def search_metadata(
         cached = cache.get(media_id, "metadata-search", parameters)
         if cached is not None:
             return ok(request, cached)
-    candidates = await service.search_metadata(
-        media_id, body.query, body.provider, body.limit
-    )
+    candidates = await service.search_metadata(media_id, body.query, body.provider, body.limit)
     payload = [
         MetadataCandidateView.from_domain(candidate).model_dump(mode="json")
         for candidate in candidates
@@ -257,8 +259,7 @@ async def get_metadata_episodes(
         body.season_number,
     )
     payload = [
-        ProviderEpisodeView.from_domain(episode).model_dump(mode="json")
-        for episode in episodes
+        ProviderEpisodeView.from_domain(episode).model_dump(mode="json") for episode in episodes
     ]
     cache.put(media_id, "metadata-episodes", payload, parameters)
     return ok(request, payload)
@@ -300,9 +301,7 @@ def update_scrape_config(
 async def run_scheduled_refresh_now(
     media_id: str,
     request: Request,
-    service: Annotated[
-        ScheduledRefreshService, Depends(get_scheduled_refresh_service)
-    ],
+    service: Annotated[ScheduledRefreshService, Depends(get_scheduled_refresh_service)],
 ) -> dict[str, object]:
     schedule = await service.run_media(media_id)
     return ok(
@@ -345,6 +344,7 @@ def preview_nfo(
             return ok(request, cached)
     preview = service.preview(
         media_id,
+        preferred_title=body.preferred_title,
         season_number=body.season_number,
         episode_offset=body.episode_offset,
         episode_mapping_mode=body.episode_mapping_mode,
@@ -360,6 +360,7 @@ def preview_nfo(
             else None
         ),
         excluded_folders=body.excluded_folders,
+        rename_folders=body.rename_folders,
     )
     payload = NfoPreviewView.from_domain(preview).model_dump(mode="json")
     cache.put(media_id, "nfo-preview", payload, parameters)
@@ -388,6 +389,7 @@ async def generate_nfo(
         local_episode_offset=body.local_episode_offset,
         excluded_paths=body.excluded_paths,
         excluded_folders=body.excluded_folders,
+        rename_folders=body.rename_folders,
         included_paths=body.included_paths,
         overwrite_existing=body.overwrite_existing,
         locked_fields=body.locked_fields,
@@ -395,3 +397,35 @@ async def generate_nfo(
     )
     cache.delete(media_id, ("scrape-info", "nfo-preview"))
     return ok(request, NfoGenerationResultView.from_domain(result).model_dump(mode="json"))
+
+
+@router.post("/{media_id}/subtitles/preview")
+def preview_subtitles(
+    media_id: str,
+    body: SubtitleMatchPreviewRequest,
+    request: Request,
+    service: Annotated[SubtitleMatchService, Depends(get_subtitle_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+) -> dict[str, object]:
+    parameters = {"version": 1}
+    if not body.refresh:
+        cached = cache.get(media_id, "subtitle-preview", parameters)
+        if cached is not None:
+            return ok(request, cached)
+    preview = service.preview(media_id)
+    payload = SubtitleMatchPreviewView.from_domain(preview).model_dump(mode="json")
+    cache.put(media_id, "subtitle-preview", payload, parameters)
+    return ok(request, payload)
+
+
+@router.post("/{media_id}/subtitles/rename")
+def rename_subtitles(
+    media_id: str,
+    body: SubtitleRenameRequest,
+    request: Request,
+    service: Annotated[SubtitleMatchService, Depends(get_subtitle_service)],
+    cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
+) -> dict[str, object]:
+    result = service.rename(media_id, confirmed=body.confirmed)
+    cache.delete(media_id, ("subtitle-preview",))
+    return ok(request, SubtitleRenameResultView.from_domain(result).model_dump(mode="json"))

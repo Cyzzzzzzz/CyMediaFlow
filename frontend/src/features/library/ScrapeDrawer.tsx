@@ -1,4 +1,4 @@
-import { CaretDown, CheckCircle, ClockCountdown, CrownSimple, Cube, FileText, FilmSlate, FloppyDisk, IdentificationBadge, ListNumbers, MagicWand, MagnifyingGlass, Play, Plus, Trash, X } from "@phosphor-icons/react";
+import { CaretDown, CheckCircle, ClockCountdown, CrownSimple, Cube, FileText, FilmSlate, FloppyDisk, IdentificationBadge, ListNumbers, MagicWand, MagnifyingGlass, Play, Plus, Subtitles, Trash, X } from "@phosphor-icons/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
@@ -7,9 +7,10 @@ import type { EpisodeMappingSuggestion, EpisodeSourceRule, LocalScrapeInfo, Medi
 import { libraryApi } from "./api";
 import { NfoPreviewPanel } from "./NfoPreviewPanel";
 import { ScrapeInfoPanel, type BangumiSeasonMetadataGroup } from "./ScrapeInfoPanel";
+import { SubtitleMatchPanel } from "./SubtitleMatchPanel";
 
 type Props = { item: MediaItem; onClose: () => void };
-type Section = "match" | "scrape" | "season" | "nfo" | "emby";
+type Section = "match" | "scrape" | "season" | "nfo" | "subtitles" | "emby";
 type Provider = "bangumi" | "tmdb";
 const defaults: MediaBinding = {
   bangumi_id: null, tmdb_id: null, preferred_title: null, content_kind: "series", year: null,
@@ -47,7 +48,8 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const metadataDetailKey = ["metadata-detail", item.id, provider, detailId] as const;
   const metadataEpisodesKey = ["metadata-episodes", item.id, provider, effectiveExternalId, providerSeasonNumber] as const;
   const scrapeInfoKey = ["scrape-info", item.id] as const;
-  const nfoPreviewKey = ["nfo-preview", item.id, form.season_number, form.episode_offset, episodeMappingMode, localEpisodeNumber, providerEpisodeNumber, localEpisodeOffset, nfoExternalId, form.episode_source_rules] as const;
+  const nfoPreviewKey = ["nfo-preview", item.id, form.preferred_title, form.season_number, form.episode_offset, episodeMappingMode, localEpisodeNumber, providerEpisodeNumber, localEpisodeOffset, nfoExternalId, form.episode_source_rules, form.metadata.nfo_excluded_folders, form.metadata.nfo_rename_folders] as const;
+  const subtitlePreviewKey = ["subtitle-preview", item.id] as const;
   const binding = useQuery({ queryKey: ["binding", item.id], queryFn: () => libraryApi.binding(item.id) });
   const cachedCandidateSearch = useQuery({
     queryKey: ["candidate-cache", item.id, provider],
@@ -115,6 +117,14 @@ export function ScrapeDrawer({ item, onClose }: Props) {
     queryKey: nfoPreviewKey,
     queryFn: () => libraryApi.nfoPreview(item.id, form, false),
     enabled: openSection === "nfo",
+    retry: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  const subtitlePreview = useQuery({
+    queryKey: subtitlePreviewKey,
+    queryFn: () => libraryApi.subtitlePreview(item.id, false),
+    enabled: openSection === "subtitles",
     retry: false,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -217,6 +227,14 @@ export function ScrapeDrawer({ item, onClose }: Props) {
   const refreshNfoPreview = useMutation({
     mutationFn: () => libraryApi.nfoPreview(item.id, form, true),
     onSuccess: (preview) => client.setQueryData(nfoPreviewKey, preview),
+  });
+  const refreshSubtitlePreview = useMutation({
+    mutationFn: () => libraryApi.subtitlePreview(item.id, true),
+    onSuccess: (preview) => client.setQueryData(subtitlePreviewKey, preview),
+  });
+  const renameSubtitles = useMutation({
+    mutationFn: () => libraryApi.renameSubtitles(item.id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: subtitlePreviewKey }),
   });
   const runScheduledRefresh = useMutation({
     mutationFn: async () => {
@@ -419,15 +437,17 @@ export function ScrapeDrawer({ item, onClose }: Props) {
           </div>
         </Accordion>
         <Accordion icon={<FileText size={21} />} title="NFO 文件" summary={nfoPreview.data ? `${nfoPreview.data.default_selected_count} 项待处理` : "媒体文件保持不变"} open={openSection === "nfo"} onToggle={() => setOpenSection("nfo")}>
-          <p className="notice nfo-safety-notice">不会重命名、移动或覆盖视频；NFO 目标名始终跟随原视频文件名。</p>
+          <p className="notice nfo-safety-notice">不会重命名、移动或覆盖视频。每个文件夹可选择让 NFO 使用“标题 SxxExx”，未选择时仍跟随视频文件名。</p>
           <NfoPreviewPanel
             preview={nfoPreview.data}
             loading={nfoPreview.isFetching || refreshNfoPreview.isPending}
             error={nfoPreview.isError}
             excludedPaths={stringList(form.metadata.nfo_excluded_paths)}
             excludedFolders={stringList(form.metadata.nfo_excluded_folders)}
+            renameFolders={stringList(form.metadata.nfo_rename_folders)}
             includedPaths={stringList(form.metadata.nfo_included_paths)}
             onSelectionChange={(excludedPaths, includedPaths, excludedFolders) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_excluded_paths: excludedPaths, nfo_included_paths: includedPaths, nfo_excluded_folders: excludedFolders } }))}
+            onRenameFoldersChange={(renameFolders) => setForm((current) => ({ ...current, metadata: { ...current.metadata, nfo_rename_folders: renameFolders } }))}
             onRefresh={() => refreshNfoPreview.mutate()}
           />
         </Accordion>
@@ -507,6 +527,19 @@ export function ScrapeDrawer({ item, onClose }: Props) {
             artworkExtractionResult={extractSeasonArtwork.data}
             artworkExtractionErrorSeason={extractSeasonArtwork.isError ? extractSeasonArtwork.variables : null}
             artworkRevision={artworkRevision}
+          />
+        </Accordion>
+        <Accordion icon={<Subtitles size={21} />} title="字幕匹配" summary={subtitlePreview.data ? `${subtitlePreview.data.rename_count} 个待重命名` : "按剧集自动匹配"} open={openSection === "subtitles"} onToggle={() => setOpenSection("subtitles")}>
+          <p className="notice nfo-safety-notice">只重命名外置字幕，不修改视频；简体、繁体及双语字幕会保留为独立文件，已有目标文件绝不覆盖。</p>
+          <SubtitleMatchPanel
+            preview={subtitlePreview.data}
+            loading={subtitlePreview.isFetching || refreshSubtitlePreview.isPending}
+            error={subtitlePreview.isError}
+            renaming={renameSubtitles.isPending}
+            renameError={renameSubtitles.isError}
+            result={renameSubtitles.data}
+            onRefresh={() => refreshSubtitlePreview.mutate()}
+            onRename={() => renameSubtitles.mutate()}
           />
         </Accordion>
         <Accordion icon={<Cube size={21} />} title="Emby 刮削" summary={form.emby_enabled ? "已启用" : "已停用"} open={openSection === "emby"} onToggle={() => setOpenSection("emby")}>

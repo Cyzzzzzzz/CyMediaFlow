@@ -12,6 +12,7 @@ from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
 from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
+from app.application.subtitle_service import SubtitleMatchService
 from app.container import Container
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
@@ -56,3 +57,7 @@ def get_result_cache(request: Request) -> SqlAlchemyResultCache:
 
 def get_scheduled_refresh_service(request: Request) -> ScheduledRefreshService:
     return get_container(request).scheduled_refresh_service
+
+
+def get_subtitle_service(request: Request) -> SubtitleMatchService:
+    return get_container(request).subtitle_service

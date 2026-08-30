@@ -16,6 +16,7 @@ from app.application.nfo_service import NfoPreviewService
 from app.application.provider_artwork_cache import ProviderArtworkCache
 from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
+from app.application.subtitle_service import SubtitleMatchService
 from app.core.config import Settings
 from app.core.path_safety import path_is_within
 from app.domain.filename_parser import FilenameParser
@@ -55,6 +56,7 @@ class Container:
     provider_artwork_cache: ProviderArtworkCache
     result_cache: SqlAlchemyResultCache
     scheduled_refresh_service: ScheduledRefreshService
+    subtitle_service: SubtitleMatchService
 
 
 def build_container(settings: Settings) -> Container:
@@ -88,9 +90,7 @@ def build_container(settings: Settings) -> Container:
     )
     stored_tmdb_token = app_settings.get("tmdb_access_token")
     tmdb_token = (
-        settings.tmdb_access_token
-        if stored_tmdb_token is None
-        else stored_tmdb_token or None
+        settings.tmdb_access_token if stored_tmdb_token is None else stored_tmdb_token or None
     )
     stored_tmdb_proxy = app_settings.get("tmdb_proxy_url")
     tmdb_proxy = settings.tmdb_proxy_url if stored_tmdb_proxy is None else stored_tmdb_proxy or None
@@ -103,11 +103,10 @@ def build_container(settings: Settings) -> Container:
         proxy_url=tmdb_proxy,
     )
     providers = {"bangumi": bangumi, "tmdb": tmdb}
-    service = MediaLibraryService(
-        catalog, repository, providers, nfo_catalog, ignore_markers
-    )
+    service = MediaLibraryService(catalog, repository, providers, nfo_catalog, ignore_markers)
     naming_service = NamingPreviewService(catalog, repository, FilenameParser())
     nfo_service = NfoPreviewService(catalog, repository, FilenameParser())
+    subtitle_service = SubtitleMatchService(catalog, repository, FilenameParser())
     episode_mapping_suggestion_service = EpisodeMappingSuggestionService(
         catalog, providers, FilenameParser()
     )
@@ -177,12 +176,11 @@ def build_container(settings: Settings) -> Container:
         provider_artwork_cache=provider_artwork_cache,
         result_cache=result_cache,
         scheduled_refresh_service=scheduled_refresh_service,
+        subtitle_service=subtitle_service,
     )
 
 
-def _effective_settings(
-    settings: Settings, app_settings: SqlAlchemySettingsRepository
-) -> Settings:
+def _effective_settings(settings: Settings, app_settings: SqlAlchemySettingsRepository) -> Settings:
     media_root = app_settings.get("media_root")
     operation_mode = app_settings.get("operation_mode")
     artwork_enabled = app_settings.get("episode_artwork_fallback_enabled")
@@ -226,9 +224,8 @@ def _stored_media_root(value: str | None, settings: Settings) -> Path:
     if not value:
         return settings.media_root
     candidate = Path(value).expanduser().resolve(strict=False)
-    if (
-        candidate.is_dir()
-        and any(path_is_within(candidate, root) for root in settings.allowed_media_roots)
+    if candidate.is_dir() and any(
+        path_is_within(candidate, root) for root in settings.allowed_media_roots
     ):
         return candidate
     return settings.media_root
