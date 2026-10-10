@@ -433,7 +433,7 @@ def preview_subtitles(
     service: Annotated[SubtitleMatchService, Depends(get_subtitle_service)],
     cache: Annotated[SqlAlchemyResultCache, Depends(get_result_cache)],
 ) -> dict[str, object]:
-    parameters = {"version": 1}
+    parameters = {"version": 2}
     if not body.refresh:
         cached = cache.get(media_id, "subtitle-preview", parameters)
         if cached is not None:

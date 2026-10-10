@@ -1434,6 +1434,64 @@ def test_subtitle_matching_keeps_bilingual_variants_distinct_and_never_overwrite
     assert len(renamed.json()["data"]["renamed_files"]) == 1
 
 
+def test_subtitle_matching_handles_episode_zero_and_ass_language_hints(
+    tmp_path: Path,
+) -> None:
+    media_root = tmp_path / "media"
+    season = media_root / "Mushoku Tensei" / "Season 2"
+    season.mkdir(parents=True)
+    episode_zero = season / "Mushoku Tensei S02E00.mkv"
+    episode_one = season / "Mushoku Tensei S02E01.mkv"
+    episode_two = season / "Mushoku Tensei S02E02.mkv"
+    for video in (episode_zero, episode_one, episode_two):
+        video.write_bytes(b"video")
+    ass_header = (
+        b"[Script Info]\n"
+        b"Title: [Nekomoe kissaten] Mushoku Tensei S2 [01].JPSC\n"
+        b"[V4+ Styles]\n"
+    )
+    zero_subtitle = season / "[VCB-Studio] Mushoku Tensei S2 [00][1080p].ass"
+    one_subtitle = season / "[VCB-Studio] Mushoku Tensei S2 [01][1080p].ass"
+    unknown_subtitle = season / "[VCB-Studio] Mushoku Tensei S2 [02][1080p].srt"
+    zero_subtitle.write_bytes(ass_header)
+    one_subtitle.write_bytes(ass_header)
+    unknown_subtitle.write_text("subtitle", encoding="utf-8")
+    settings = Settings(
+        media_root=media_root,
+        allowed_media_root=media_root,
+        data_dir=tmp_path / "data",
+        bangumi_token_file=tmp_path / "missing-token.json",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        media_id = client.get("/api/v1/media", params={"include_suggestions": "false"}).json()[
+            "data"
+        ][0]["id"]
+        preview = client.post(
+            f"/api/v1/media/{media_id}/subtitles/preview", json={"refresh": True}
+        )
+        renamed = client.post(
+            f"/api/v1/media/{media_id}/subtitles/rename", json={"confirmed": True}
+        )
+
+    assert preview.status_code == 200
+    data = preview.json()["data"]
+    assert data["rename_count"] == 3
+    entries = {entry["source_name"]: entry for entry in data["entries"]}
+    assert entries[zero_subtitle.name]["episode_number"] == 0
+    assert entries[zero_subtitle.name]["language_tag"] == "scjp"
+    assert entries[zero_subtitle.name]["target_name"] == f"{episode_zero.stem}.scjp.ass"
+    assert entries[one_subtitle.name]["target_name"] == f"{episode_one.stem}.scjp.ass"
+    assert entries[unknown_subtitle.name]["status"] == "rename"
+    assert entries[unknown_subtitle.name]["target_name"] == f"{episode_two.stem}.srt"
+    assert "SUBTITLE_LANGUAGE_UNKNOWN" in entries[unknown_subtitle.name]["warnings"]
+    assert renamed.status_code == 200
+    assert len(renamed.json()["data"]["renamed_files"]) == 3
+    assert (season / f"{episode_zero.stem}.scjp.ass").read_bytes() == ass_header
+    assert (season / f"{episode_one.stem}.scjp.ass").read_bytes() == ass_header
+    assert (season / f"{episode_two.stem}.srt").read_text(encoding="utf-8") == "subtitle"
+
+
 def test_provider_artwork_is_served_local_first_and_cached_on_miss(tmp_path: Path) -> None:
     media_root = tmp_path / "media"
     series = media_root / "Example Show"

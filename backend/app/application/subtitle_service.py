@@ -35,8 +35,10 @@ LANGUAGE_TAGS = {
     "zh-hk": ("zh-HK", "tc"),
     "scjp": ("zh-CN+ja", "scjp"),
     "chsjp": ("zh-CN+ja", "scjp"),
+    "jpsc": ("zh-CN+ja", "scjp"),
     "tcjp": ("zh-TW+ja", "tcjp"),
     "chtjp": ("zh-TW+ja", "tcjp"),
+    "jptc": ("zh-TW+ja", "tcjp"),
     "ja": ("ja", "ja"),
     "jp": ("ja", "ja"),
     "jpn": ("ja", "ja"),
@@ -56,6 +58,12 @@ SUBTITLE_FLAGS = {
     "bilingual",
 }
 SPECIAL_WITHOUT_NUMBER = re.compile(r"(?i)(?:^|[\[\s._-])(OVA|OAD|SP|SPECIAL)(?:[\]\s._-]|$)")
+LANGUAGE_HINT = re.compile(
+    r"(?i)(?:^|[^a-z0-9])"
+    r"(?P<tag>zh-cn|zh-tw|zh-hk|chsjp|chtjp|scjp|tcjp|jpsc|jptc|chs|cht|big5|"
+    r"sc|tc|gb|jpn|jp|ja|eng|en)"
+    r"(?=$|[^a-z0-9])"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +141,11 @@ class SubtitleMatchService:
         for source, relative, parsed in parsed_subtitles:
             folder_key = relative.parent.as_posix().casefold()
             warnings = list(parsed.warnings)
-            language, language_tag, flags = self._subtitle_suffix(source.name)
+            language, language_tag, flags = self._subtitle_suffix(source)
             episode = self._episode(parsed)
-            candidates = videos_by_key.get((folder_key, episode), []) if episode else []
+            candidates = (
+                videos_by_key.get((folder_key, episode), []) if episode is not None else []
+            )
             if not candidates and episode is None and SPECIAL_WITHOUT_NUMBER.search(source.stem):
                 unmatched = [
                     video
@@ -159,12 +169,17 @@ class SubtitleMatchService:
             else:
                 video = candidates[0]
             if language_tag is None:
-                reason = reason or "SUBTITLE_LANGUAGE_UNKNOWN"
                 warnings.append("SUBTITLE_LANGUAGE_UNKNOWN")
 
             target = None
-            if video is not None and language_tag is not None:
-                suffix = ".".join((language_tag, *flags, source.suffix.casefold().lstrip(".")))
+            if video is not None:
+                suffix = ".".join(
+                    (
+                        *((language_tag,) if language_tag is not None else ()),
+                        *flags,
+                        source.suffix.casefold().lstrip("."),
+                    )
+                )
                 target = video.path.with_name(f"{video.path.stem}.{suffix}")
             drafts.append(
                 _Draft(
@@ -298,20 +313,54 @@ class SubtitleMatchService:
 
     @staticmethod
     def _episode(parsed: ParsedMediaInfo) -> int | None:
-        return parsed.episode_start or parsed.absolute_episode_start or parsed.special_number
+        for number in (
+            parsed.episode_start,
+            parsed.absolute_episode_start,
+            parsed.special_number,
+        ):
+            if number is not None:
+                return number
+        return None
 
-    @staticmethod
-    def _subtitle_suffix(filename: str) -> tuple[str | None, str | None, tuple[str, ...]]:
-        tokens = Path(filename).stem.split(".")
+    @classmethod
+    def _subtitle_suffix(cls, source: Path) -> tuple[str | None, str | None, tuple[str, ...]]:
+        tokens = source.stem.split(".")
         flags: list[str] = []
         while len(tokens) > 1 and tokens[-1].casefold() in SUBTITLE_FLAGS:
             flags.append(tokens.pop().casefold())
-        if len(tokens) <= 1:
-            return None, None, tuple(sorted(set(flags)))
-        language = LANGUAGE_TAGS.get(tokens[-1].casefold())
+        language = LANGUAGE_TAGS.get(tokens[-1].casefold()) if len(tokens) > 1 else None
+        if language is None:
+            language = cls._language_hint(source.stem)
+        if language is None and source.suffix.casefold() in {".ass", ".ssa"}:
+            language = cls._ass_language_hint(source)
         if language is None:
             return None, None, tuple(sorted(set(flags)))
         return language[0], language[1], tuple(sorted(set(flags)))
+
+    @staticmethod
+    def _language_hint(value: str) -> tuple[str, str] | None:
+        matches = tuple(LANGUAGE_HINT.finditer(value))
+        if not matches:
+            return None
+        return LANGUAGE_TAGS.get(matches[-1].group("tag").casefold())
+
+    @classmethod
+    def _ass_language_hint(cls, source: Path) -> tuple[str, str] | None:
+        try:
+            with source.open("r", encoding="utf-8-sig", errors="ignore") as handle:
+                header = handle.read(65536)
+        except OSError:
+            return None
+        script_info = header.split("[V4", 1)[0]
+        title = next(
+            (
+                line.partition(":")[2].strip()
+                for line in script_info.splitlines()
+                if line.casefold().startswith("title:")
+            ),
+            "",
+        )
+        return cls._language_hint(title)
 
     @staticmethod
     def _copy_then_remove(pairs: list[tuple[Path, Path]]) -> None:
