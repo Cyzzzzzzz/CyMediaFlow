@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from pathlib import Path
+from threading import RLock
+from time import monotonic
 
 from app.domain.artwork import IMAGE_EXTENSIONS
 from app.domain.media import ExternalIdentity, MediaItem
@@ -18,11 +21,17 @@ from app.infrastructure.filesystem.media_scanner import (
 )
 
 MAX_NFO_BYTES = 2 * 1024 * 1024
+SeasonDocuments = dict[int, tuple[Path, ET.Element]]
+EpisodeDocuments = dict[tuple[int, int], tuple[Path, ET.Element]]
 
 
 class FileSystemNfoCatalog:
     def __init__(self, media_catalog: FileSystemMediaCatalog) -> None:
         self._media_catalog = media_catalog
+        self._artwork_indexes: OrderedDict[
+            str, tuple[float, str | None, MediaItem, SeasonDocuments, EpisodeDocuments]
+        ] = OrderedDict()
+        self._artwork_lock = RLock()
 
     def get_scrape_info(self, media_id: str) -> LocalScrapeInfo | None:
         item = self._media_catalog.get_media(media_id)
@@ -30,6 +39,8 @@ class FileSystemNfoCatalog:
             return None
         season_documents = self._season_documents(item)
         episode_documents = self._episode_documents(item)
+        with self._artwork_lock:
+            self._remember_artwork_index(item, None, season_documents, episode_documents)
         series = self._series_info(item)
         season_numbers = sorted(set(season_documents) | {key[0] for key in episode_documents})
         seasons = tuple(
@@ -49,15 +60,17 @@ class FileSystemNfoCatalog:
         level: str,
         season_number: int | None = None,
         episode_number: int | None = None,
+        revision: str | None = None,
     ) -> Path | None:
-        item = self._media_catalog.get_media(media_id)
-        if item is None:
-            return None
         if level == "series":
-            return item.poster_path
+            return self._media_catalog.get_poster_path(media_id)
         if season_number is None:
             return None
-        season_document = self._season_documents(item).get(season_number)
+        documents = self._artwork_documents(media_id, revision)
+        if documents is None:
+            return None
+        item, season_documents, episode_documents = documents
+        season_document = season_documents.get(season_number)
         season_directory = (
             season_document[0].parent
             if season_document
@@ -67,7 +80,7 @@ class FileSystemNfoCatalog:
             return self._season_artwork(item, season_number, season_directory)[0]
         if level != "episode" or episode_number is None:
             return None
-        episode_document = self._episode_documents(item).get((season_number, episode_number))
+        episode_document = episode_documents.get((season_number, episode_number))
         if episode_document:
             episode_artwork = self._episode_artwork(
                 episode_document[0], episode_document[1], item.root_path
@@ -75,6 +88,37 @@ class FileSystemNfoCatalog:
             if episode_artwork:
                 return episode_artwork
         return self._season_artwork(item, season_number, season_directory)[0]
+
+    def _artwork_documents(
+        self, media_id: str, revision: str | None
+    ) -> tuple[MediaItem, SeasonDocuments, EpisodeDocuments] | None:
+        directory = self._media_catalog.get_media_root(media_id)
+        if directory is None:
+            return None
+        with self._artwork_lock:
+            cached = self._artwork_indexes.get(media_id)
+            if (
+                cached is not None and monotonic() - cached[0] < 30
+                and cached[1] == revision and cached[2].root_path == directory
+            ):
+                self._artwork_indexes.move_to_end(media_id)
+                return cached[2], cached[3], cached[4]
+            item = self._media_catalog.get_media(media_id)
+            if item is None:
+                return None
+            seasons = self._season_documents(item)
+            episodes = self._episode_documents(item)
+            self._remember_artwork_index(item, revision, seasons, episodes)
+            return item, seasons, episodes
+
+    def _remember_artwork_index(
+        self, item: MediaItem, revision: str | None,
+        seasons: SeasonDocuments, episodes: EpisodeDocuments,
+    ) -> None:
+        self._artwork_indexes[item.id] = (monotonic(), revision, item, seasons, episodes)
+        self._artwork_indexes.move_to_end(item.id)
+        while len(self._artwork_indexes) > 16:
+            self._artwork_indexes.popitem(last=False)
 
     def _series_info(self, item: MediaItem) -> SeriesScrapeInfo | None:
         nfo_path = item.root_path / "tvshow.nfo"

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi import Path as PathParameter
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import (
     get_episode_file_rename_service,
     get_episode_mapping_suggestion_service,
+    get_image_files,
     get_media_service,
     get_naming_service,
     get_nfo_generation_service,
@@ -59,9 +60,11 @@ from app.application.provider_artwork_cache import ProviderArtworkCache
 from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.application.subtitle_service import SubtitleMatchService
+from app.infrastructure.media.image_files import ImageFileService
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
 router = APIRouter(prefix="/media", tags=["media"])
+ImageWidth = Annotated[int | None, Query(ge=64, le=640)]
 
 
 @router.get("")
@@ -69,7 +72,7 @@ async def list_media(
     request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
     q: str | None = None,
-    include_suggestions: bool = True,
+    include_suggestions: bool = False,
     sort: Literal["added_desc", "name_asc"] = Query(default="added_desc"),
 ) -> dict[str, object]:
     items = await service.list_media(q, include_suggestions, sort)
@@ -95,12 +98,12 @@ def get_media(
 @router.get("/{media_id}/poster", response_class=FileResponse)
 def get_poster(
     media_id: str,
+    request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
-) -> FileResponse:
-    item, _ = service.get_media(media_id)
-    if item.poster_path is None:
-        raise FileNotFoundError("Poster not found")
-    return FileResponse(Path(item.poster_path))
+    images: Annotated[ImageFileService, Depends(get_image_files)],
+    width: ImageWidth = None,
+) -> Response:
+    return images.response(request, service.get_poster(media_id), width)
 
 
 @router.get("/{media_id}/scrape-info")
@@ -124,18 +127,27 @@ def get_scrape_info(
 @router.get("/{media_id}/artwork/series", response_class=FileResponse)
 def get_series_artwork(
     media_id: str,
+    request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
-) -> FileResponse:
-    return FileResponse(service.get_scrape_artwork(media_id, "series"))
+    images: Annotated[ImageFileService, Depends(get_image_files)],
+    width: ImageWidth = None,
+) -> Response:
+    return images.response(request, service.get_poster(media_id), width)
 
 
 @router.get("/{media_id}/artwork/seasons/{season_number}", response_class=FileResponse)
 def get_season_artwork(
     media_id: str,
     season_number: int,
+    request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
-) -> FileResponse:
-    return FileResponse(service.get_scrape_artwork(media_id, "season", season_number))
+    images: Annotated[ImageFileService, Depends(get_image_files)],
+    width: ImageWidth = None,
+    v: Annotated[str | None, Query(max_length=100)] = None,
+) -> Response:
+    return images.response(
+        request, service.get_scrape_artwork(media_id, "season", season_number, revision=v), width
+    )
 
 
 @router.get(
@@ -146,10 +158,16 @@ def get_episode_artwork(
     media_id: str,
     season_number: int,
     episode_number: int,
+    request: Request,
     service: Annotated[MediaLibraryService, Depends(get_media_service)],
-) -> FileResponse:
-    return FileResponse(
-        service.get_scrape_artwork(media_id, "episode", season_number, episode_number)
+    images: Annotated[ImageFileService, Depends(get_image_files)],
+    width: ImageWidth = None,
+    v: Annotated[str | None, Query(max_length=100)] = None,
+) -> Response:
+    return images.response(
+        request,
+        service.get_scrape_artwork(media_id, "episode", season_number, episode_number, v),
+        width,
     )
 
 
@@ -177,14 +195,14 @@ async def get_provider_artwork(
     media_id: str,
     category: str,
     external_id: str,
+    request: Request,
     cache: Annotated[ProviderArtworkCache, Depends(get_provider_artwork_cache)],
+    images: Annotated[ImageFileService, Depends(get_image_files)],
     url: Annotated[str | None, Query(max_length=2048)] = None,
-) -> FileResponse:
+    width: ImageWidth = None,
+) -> Response:
     target = await cache.get_or_cache(media_id, category, external_id, url)
-    return FileResponse(
-        target,
-        headers={"Cache-Control": "public, max-age=604800, immutable"},
-    )
+    return await run_in_threadpool(images.response, request, target, width)
 
 
 @router.post("/{media_id}/metadata/search")

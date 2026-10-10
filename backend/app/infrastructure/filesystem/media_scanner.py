@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 
 from app.core.path_safety import path_is_within
 from app.domain.media import ExternalIdentity, MediaItem
@@ -32,16 +34,58 @@ class FileSystemMediaCatalog:
         roots = allowed_root if isinstance(allowed_root, tuple) else (allowed_root,)
         self._allowed_roots = tuple(root.resolve(strict=False) for root in roots)
         self._assert_within_allowed(self._root)
+        self._directory_index: dict[str, Path] = {}
+        self._directory_stamp: int | None = None
+        self._index_lock = RLock()
 
     def list_media(self) -> list[MediaItem]:
-        if not self._root.is_dir():
-            return []
-        return [
-            self._scan_directory(path) for path in sorted(self._root.iterdir()) if path.is_dir()
-        ]
+        return [self._scan_directory(path) for path in self._directories(refresh=True).values()]
 
     def get_media(self, media_id: str) -> MediaItem | None:
-        return next((item for item in self.list_media() if item.id == media_id), None)
+        directory = self.get_media_root(media_id)
+        return self._scan_directory(directory) if directory is not None else None
+
+    def get_media_root(self, media_id: str) -> Path | None:
+        directory = self._directories().get(media_id)
+        if directory is None or not directory.is_dir():
+            # Windows/SMB may coalesce directory timestamp changes within one clock tick.
+            directory = self._directories(refresh=True).get(media_id)
+        if directory is None or not directory.is_dir():
+            return None
+        self._assert_within_allowed(directory.resolve(strict=False))
+        return directory
+
+    def get_poster_path(self, media_id: str) -> Path | None:
+        directory = self.get_media_root(media_id)
+        if directory is None:
+            return None
+        direct = self._find_poster(directory, [])
+        return direct or self._find_poster(directory, self._media_files(directory))
+
+    def _directories(self, *, refresh: bool = False) -> dict[str, Path]:
+        with self._index_lock:
+            if not self._root.is_dir():
+                self._directory_index = {}
+                self._directory_stamp = None
+                return {}
+            stamp = self._root.stat().st_mtime_ns
+            if refresh or stamp != self._directory_stamp:
+                self._directory_index = {
+                    hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]: path
+                    for path in sorted(self._root.iterdir())
+                    if path.is_dir()
+                }
+                self._directory_stamp = stamp
+            return self._directory_index
+
+    @staticmethod
+    def _media_files(directory: Path) -> list[Path]:
+        # Provider image caches can contain thousands of files, none are media inputs.
+        files: list[Path] = []
+        for parent, folders, names in os.walk(directory):
+            folders[:] = sorted(name for name in folders if name != ".cymediaflow")
+            files.extend(Path(parent) / name for name in sorted(names))
+        return files
 
     def list_video_files(self, media_id: str) -> tuple[Path, ...]:
         item = self.get_media(media_id)
@@ -84,7 +128,7 @@ class FileSystemMediaCatalog:
 
     def _scan_directory(self, directory: Path) -> MediaItem:
         self._assert_within_allowed(directory.resolve(strict=False))
-        files = [path for path in directory.rglob("*") if path.is_file()]
+        files = self._media_files(directory)
         videos = [path for path in files if path.suffix.casefold() in VIDEO_EXTENSIONS]
         poster = self._find_poster(directory, files)
         nfo = self._find_tv_nfo(directory, files)

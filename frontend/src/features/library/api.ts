@@ -5,7 +5,7 @@ export type LibrarySort = "added_desc" | "name_asc";
 
 export const libraryApi = {
   list: (search = "", sort: LibrarySort = "added_desc") => {
-    const params = new URLSearchParams({ include_suggestions: "true", q: search, sort });
+    const params = new URLSearchParams({ include_suggestions: "false", q: search, sort });
     return apiRequest<MediaItem[]>(`/api/v1/media?${params.toString()}`);
   },
   candidates: (id: string, query: string, provider: "bangumi" | "tmdb", limit = 10, refresh = false) => apiRequest<MetadataCandidate[]>(`/api/v1/media/${id}/metadata/search`, { method: "POST", body: JSON.stringify({ query, provider, limit, refresh }) }),

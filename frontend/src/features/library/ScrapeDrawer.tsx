@@ -376,7 +376,7 @@ export function ScrapeDrawer({ item, onClose }: Props) {
     setDetailId(next === "tmdb" ? (form.tmdb_id || nfoTmdbId) : (form.bangumi_id || nfoBangumiId));
   };
 
-  const cover = imageSource(form.image_url || item.poster_url);
+  const cover = imageSource(item.poster_url || form.image_url);
 
   return <div className="drawer-layer" role="presentation" onMouseDown={onClose}>
     <aside className="scrape-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>

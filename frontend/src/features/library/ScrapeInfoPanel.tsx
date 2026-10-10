@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { imageSource } from "../../api/images";
 import type { EpisodeScrapeInfo, LocalScrapeInfo, MetadataCandidate, NfoGenerationResult, ProviderEpisode, SeasonArtworkExtractionResult, SeasonScrapeInfo } from "../../api/types";
+import { ArtworkImage } from "../../components/ArtworkImage";
 import { NfoFieldPolicyEditor } from "./NfoFieldPolicyEditor";
 
 export type BangumiSeasonMetadataGroup = {
@@ -300,11 +301,11 @@ function BangumiSubjectMetadata({ mediaId, metadata }: { mediaId: string | undef
 
 function MetadataPortrait({ mediaId, category, externalId, remoteUrl, alt }: { mediaId: string | undefined; category: "persons" | "characters" | "voice-actors" | "related"; externalId: string; remoteUrl: string | null; alt: string }) {
   const source = mediaId
-    ? providerArtworkSource(mediaId, category, externalId, remoteUrl)
-    : imageSource(remoteUrl);
+    ? imageSource(providerArtworkSource(mediaId, category, externalId, remoteUrl), 160)
+    : imageSource(remoteUrl, 160);
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [source]);
-  return <span className="bangumi-portrait">{source && !failed ? <img src={source} alt={alt} loading="lazy" onError={() => setFailed(true)} /> : <FilmSlate size={18} />}</span>;
+  return <span className="bangumi-portrait">{source && !failed ? <ArtworkImage src={source} alt={alt} onError={() => setFailed(true)} /> : <FilmSlate size={18} />}</span>;
 }
 
 function providerArtworkSource(mediaId: string, category: string, externalId: string, remoteUrl: string | null) {
@@ -556,7 +557,7 @@ function EpisodeMetadataDetail({ episode, providerName, artworkRevision }: { epi
 
 function Artwork({ className, url, alt }: { className: string; url: string | null; alt: string }) {
   const source = imageSource(url);
-  return <div className={className}>{source ? <img src={source} alt={alt} /> : <FilmSlate size={24} />}</div>;
+  return <div className={className}>{source ? <ArtworkImage src={source} alt={alt} /> : <FilmSlate size={24} />}</div>;
 }
 
 function InfoLine({ label, values }: { label: string; values: string[] }) {

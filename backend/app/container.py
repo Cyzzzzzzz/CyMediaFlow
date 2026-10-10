@@ -26,6 +26,7 @@ from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
 from app.infrastructure.filesystem.nfo_reader import FileSystemNfoCatalog
 from app.infrastructure.media.ffmpeg_artwork import FfmpegEpisodeArtworkGenerator
 from app.infrastructure.media.ffprobe import FfprobeMediaProbe
+from app.infrastructure.media.image_files import ImageFileService
 from app.infrastructure.media.remote_artwork import HttpRemoteArtworkDownloader
 from app.infrastructure.persistence.binding_repository import SqlAlchemyBindingRepository
 from app.infrastructure.persistence.database import create_session_factory, initialize_database
@@ -52,6 +53,7 @@ class Container:
     bangumi: BangumiMetadataProvider
     tmdb: TmdbMetadataProvider
     image_proxy: BangumiImageProxy
+    image_files: ImageFileService
     app_settings: SqlAlchemySettingsRepository
     ignore_markers: IgnoreMarkerManager
     remote_artwork: HttpRemoteArtworkDownloader
@@ -174,6 +176,7 @@ def build_container(settings: Settings) -> Container:
         bangumi=bangumi,
         tmdb=tmdb,
         image_proxy=image_proxy,
+        image_files=ImageFileService(settings.data_dir / "image-thumbnails"),
         app_settings=app_settings,
         ignore_markers=ignore_markers,
         remote_artwork=remote_artwork,

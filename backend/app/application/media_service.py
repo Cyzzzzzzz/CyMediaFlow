@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
+from starlette.concurrency import run_in_threadpool
+
 from app.application.ports import (
     BindingRepositoryPort,
     IgnoreMarkerPort,
@@ -47,11 +49,11 @@ class MediaLibraryService:
     async def list_media(
         self,
         query: str | None = None,
-        include_suggestions: bool = True,
+        include_suggestions: bool = False,
         sort: Literal["added_desc", "name_asc"] = "added_desc",
     ) -> list[tuple[MediaItem, ScrapeBinding | None, str | None]]:
-        items = self._catalog.list_media()
-        bindings = self._bindings.list_all()
+        items = await run_in_threadpool(self._catalog.list_media)
+        bindings = await run_in_threadpool(self._bindings.list_all)
         if query:
             needle = query.casefold().strip()
             items = [
@@ -115,6 +117,12 @@ class MediaLibraryService:
         if item is None:
             raise MediaNotFoundError(media_id)
         return item, self._bindings.get(media_id)
+
+    def get_poster(self, media_id: str) -> Path:
+        poster = self._catalog.get_poster_path(media_id)
+        if poster is None:
+            raise FileNotFoundError("Poster not found")
+        return poster
 
     async def search_metadata(
         self,
@@ -199,13 +207,14 @@ class MediaLibraryService:
         level: str,
         season_number: int | None = None,
         episode_number: int | None = None,
+        revision: str | None = None,
     ) -> Path:
-        self.get_media(media_id)
         artwork = self._nfo_catalog.get_artwork(
             media_id,
             level,
             season_number,
             episode_number,
+            revision,
         )
         if artwork is None:
             raise FileNotFoundError("Scrape artwork not found")

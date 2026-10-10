@@ -39,7 +39,7 @@ export function LibraryPage() {
     {library.isError ? <div className="page-state">无法读取媒体目录，请检查设置。</div> : null}
     {library.isLoading ? <div className="poster-grid" aria-label="正在加载">{Array.from({ length: 10 }, (_, i) => <div className="poster-skeleton" key={i} />)}</div> : null}
     {library.data?.length === 0 ? <div className="page-state">没有找到匹配的番剧。</div> : null}
-    {library.data?.length ? <div className="poster-grid">{library.data.map((item) => <PosterCard item={item} selected={selected?.id === item.id} key={item.id} onOpen={setSelected} />)}</div> : null}
+    {library.data?.length ? <div className="poster-grid">{library.data.map((item, index) => <PosterCard item={item} priority={index < 6} selected={selected?.id === item.id} key={item.id} onOpen={setSelected} />)}</div> : null}
     {selected ? <ScrapeDrawer item={selected} onClose={() => setSelected(null)} /> : null}
   </div>;
 }

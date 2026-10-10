@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from contextlib import suppress
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+
+from starlette.concurrency import run_in_threadpool
 
 from app.application.ports import MediaCatalogPort, RemoteArtworkDownloaderPort
 from app.core.errors import MediaNotFoundError, ProviderArtworkUnavailableError
@@ -21,6 +25,8 @@ class ProviderArtworkCache:
     ) -> None:
         self._catalog = catalog
         self._downloader = downloader
+        self._locks = tuple(asyncio.Lock() for _ in range(32))
+        self._downloads = asyncio.Semaphore(4)
 
     async def get_or_cache(
         self,
@@ -29,43 +35,57 @@ class ProviderArtworkCache:
         external_id: str,
         remote_url: str | None,
     ) -> Path:
-        item = self._catalog.get_media(media_id)
-        if item is None:
-            raise MediaNotFoundError(media_id)
         if category not in self.categories or not self._safe_id.fullmatch(external_id):
             raise ProviderArtworkUnavailableError("INVALID_PROVIDER_ARTWORK_PATH")
-
-        directory = item.root_path / ".cymediaflow" / "artwork" / category
-        cached = self._find(directory, external_id)
+        root = await run_in_threadpool(self._catalog.get_media_root, media_id)
+        if root is None:
+            raise MediaNotFoundError(media_id)
+        directory = root / ".cymediaflow" / "artwork" / category
+        cached = await run_in_threadpool(self._find, directory, external_id)
         if cached is not None:
             return cached
         if not remote_url:
             raise ProviderArtworkUnavailableError()
 
-        image = await self._downloader.download(remote_url)
-        if image.warning_code or not image.content or not image.extension:
-            raise ProviderArtworkUnavailableError(
-                image.warning_code or "PROVIDER_ARTWORK_NOT_FOUND"
+        lock = self._locks[hash((media_id, category, external_id)) % len(self._locks)]
+        async with lock:
+            cached = await run_in_threadpool(self._find, directory, external_id)
+            if cached is not None:
+                return cached
+            async with self._downloads:
+                image = await self._downloader.download(remote_url)
+            if image.warning_code or not image.content or not image.extension:
+                raise ProviderArtworkUnavailableError(
+                    image.warning_code or "PROVIDER_ARTWORK_NOT_FOUND"
+                )
+            return await run_in_threadpool(
+                self._save, root, directory, external_id, image.content, image.extension
             )
 
-        directory.mkdir(parents=True, exist_ok=True)
-        self._ensure_ignore_marker(item.root_path)
-        target = directory / f"{external_id}{image.extension}"
+    def _save(
+        self, root: Path, directory: Path, external_id: str, content: bytes, extension: str
+    ) -> Path:
+        temporary: Path | None = None
         try:
-            with target.open("xb") as handle:
-                handle.write(image.content)
+            directory.mkdir(parents=True, exist_ok=True)
+            self._ensure_ignore_marker(root)
+            target = directory / f"{external_id}{extension}"
+            with NamedTemporaryFile(dir=directory, suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-        except FileExistsError:
             cached = self._find(directory, external_id)
             if cached is not None:
                 return cached
-            raise ProviderArtworkUnavailableError("PROVIDER_ARTWORK_WRITE_FAILED") from None
+            temporary.replace(target)
+            return target
         except OSError as exc:
-            with suppress(OSError):
-                target.unlink()
             raise ProviderArtworkUnavailableError("PROVIDER_ARTWORK_WRITE_FAILED") from exc
-        return target
+        finally:
+            if temporary is not None:
+                with suppress(OSError):
+                    temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _find(directory: Path, stem: str) -> Path | None:

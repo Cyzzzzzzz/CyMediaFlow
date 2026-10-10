@@ -15,6 +15,7 @@ from app.application.scheduled_refresh_service import ScheduledRefreshService
 from app.application.season_artwork_service import SeasonArtworkExtractionService
 from app.application.subtitle_service import SubtitleMatchService
 from app.container import Container
+from app.infrastructure.media.image_files import ImageFileService
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 
 
@@ -24,6 +25,10 @@ def get_container(request: Request) -> Container:
 
 def get_media_service(request: Request) -> MediaLibraryService:
     return get_container(request).media_service
+
+
+def get_image_files(request: Request) -> ImageFileService:
+    return get_container(request).image_files
 
 
 def get_naming_service(request: Request) -> NamingPreviewService:
