@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, create_engine
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -57,6 +67,104 @@ class CachedResultRecord(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class AutomationFeedRecord(Base):
+    __tablename__ = "automation_feeds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    url: Mapped[str] = mapped_column(Text, unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(30), default="never")
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class AutomationSubscriptionRecord(Base):
+    __tablename__ = "automation_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    feed_id: Mapped[int] = mapped_column(ForeignKey("automation_feeds.id"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    folder_name: Mapped[str] = mapped_column(String(300))
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    season: Mapped[int] = mapped_column(Integer, default=1)
+    episode_offset: Mapped[int] = mapped_column(Integer, default=0)
+    preferred_group: Mapped[str | None] = mapped_column(String(200))
+    preferred_resolution: Mapped[str | None] = mapped_column(String(40))
+    exclude_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AutomationReleaseRecord(Base):
+    __tablename__ = "automation_releases"
+    __table_args__ = (UniqueConstraint("feed_id", "identity", name="uq_automation_feed_identity"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    feed_id: Mapped[int] = mapped_column(ForeignKey("automation_feeds.id"), index=True)
+    identity: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(1000))
+    download_url: Mapped[str] = mapped_column(Text)
+    parsed: Mapped[dict] = mapped_column(JSON, default=dict)
+    decision: Mapped[str] = mapped_column(String(30), default="new")
+    reason: Mapped[str | None] = mapped_column(String(500))
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AutomationDownloadRecord(Base):
+    __tablename__ = "automation_downloads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    release_id: Mapped[int] = mapped_column(ForeignKey("automation_releases.id"), unique=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("automation_subscriptions.id"))
+    qb_tag: Mapped[str] = mapped_column(String(80), unique=True)
+    torrent_hash: Mapped[str | None] = mapped_column(String(100))
+    save_path: Mapped[str] = mapped_column(String(1000))
+    local_path: Mapped[str] = mapped_column(String(1000))
+    state: Mapped[str] = mapped_column(String(30), default="planned")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AutomationFileOperationRecord(Base):
+    __tablename__ = "automation_file_operations"
+    __table_args__ = (
+        UniqueConstraint("download_id", "source_path", name="uq_automation_file_source"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    download_id: Mapped[int] = mapped_column(ForeignKey("automation_downloads.id"), index=True)
+    source_path: Mapped[str] = mapped_column(String(1000))
+    target_path: Mapped[str] = mapped_column(String(1000))
+    state: Mapped[str] = mapped_column(String(30), default="planned")
+    error: Mapped[str | None] = mapped_column(String(1000))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class AutomationEventRecord(Base):
+    __tablename__ = "automation_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    message: Mapped[str] = mapped_column(String(1000))
+    feed_id: Mapped[int | None] = mapped_column(Integer)
+    download_id: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
 

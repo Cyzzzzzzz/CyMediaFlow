@@ -662,8 +662,9 @@ For local-build deployments:
 
 ```bash
 cd /volume2/docker/0016.CyMediaFlow/src
+sudo su
 git status --short
-git pull --ff-only origin main
+git -c http.proxy=http://192.168.5.124:20181 pull --ff-only origin main
 ./scripts/nas-local-update.sh
 ```
 
