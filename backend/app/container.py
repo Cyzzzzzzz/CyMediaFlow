@@ -6,6 +6,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.automation_service import AutomationService
 from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
@@ -28,6 +29,7 @@ from app.infrastructure.media.ffmpeg_artwork import FfmpegEpisodeArtworkGenerato
 from app.infrastructure.media.ffprobe import FfprobeMediaProbe
 from app.infrastructure.media.image_files import ImageFileService
 from app.infrastructure.media.remote_artwork import HttpRemoteArtworkDownloader
+from app.infrastructure.persistence.automation_repository import AutomationRepository
 from app.infrastructure.persistence.binding_repository import SqlAlchemyBindingRepository
 from app.infrastructure.persistence.database import create_session_factory, initialize_database
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
@@ -61,6 +63,7 @@ class Container:
     result_cache: SqlAlchemyResultCache
     scheduled_refresh_service: ScheduledRefreshService
     subtitle_service: SubtitleMatchService
+    automation_service: AutomationService
 
 
 def build_container(settings: Settings) -> Container:
@@ -161,6 +164,12 @@ def build_container(settings: Settings) -> Container:
         nfo_generation_service,
         result_cache,
     )
+    automation_service = AutomationService(
+        AutomationRepository(factory),
+        app_settings,
+        catalog,
+        settings.media_root,
+    )
     return Container(
         settings=settings,
         session_factory=factory,
@@ -184,6 +193,7 @@ def build_container(settings: Settings) -> Container:
         result_cache=result_cache,
         scheduled_refresh_service=scheduled_refresh_service,
         subtitle_service=subtitle_service,
+        automation_service=automation_service,
     )
 
 

@@ -21,9 +21,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.container = build_container(active_settings)
         await app.state.container.scheduled_refresh_service.start()
+        await app.state.container.automation_service.start()
         try:
             yield
         finally:
+            await app.state.container.automation_service.stop()
             await app.state.container.scheduled_refresh_service.stop()
 
     app = FastAPI(title="CyMediaFlow", version="0.1.0", lifespan=lifespan)

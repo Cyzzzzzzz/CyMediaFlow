@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { apiRequest } from "../../api/client";
 import type { SettingsUpdate, SettingsView } from "../../api/types";
+import { AutomationSettings } from "../automation/AutomationSettings";
 
 const defaultProxy = "http://192.168.5.124:20181";
 const emptyForm: SettingsUpdate = {
@@ -117,6 +118,8 @@ export function SettingsPage() {
     </SettingsSection>
 
     <div className="settings-savebar"><span>{save.isSuccess ? `设置已生效，正在扫描 ${settings.data?.media_root ?? form.media_root}` : save.isError ? save.error.message : "Token 不会通过接口回传"}</span><button className="primary-button" type="button" onClick={() => save.mutate()} disabled={save.isPending || !form.media_root}>{save.isPending ? "保存中" : "保存设置"}</button></div>
+    <div className="settings-group-divider"><span className="eyebrow">AutoBangumi</span><h2>自动追番设置</h2></div>
+    <AutomationSettings />
   </div>;
 }
 

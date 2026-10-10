@@ -1453,3 +1453,11 @@ GET  /api/v1/events/stream
 - 验证结果：Ruff、后端 107 项测试、前端 39 项测试、TypeScript 检查和生产构建全部通过。Edge 已验证首页 favicon、抽屉本地海报及展开后的角色图（首张约 25 ms）；折叠的制作人员列表和屏幕外头像未提前发起请求，浏览器没有脚本异常。
 - 部署兼容性：保持 `python:3.10-slim-bookworm`、`node:22-alpine`、`nginx:alpine` 不变；已检查本次 Python 修改的 3.10 语法兼容性，并成功下载符合依赖范围的 Linux amd64／CPython 3.10 Pillow 预编译 wheel。当前工作机没有 Docker，未把这些检查视为 NAS 容器实际构建或上线验证。
 - 本次需要同时重新构建前后端镜像（新增 Pillow，前端和 Nginx 也有变化）。提交推送后，NAS 沿用 `git pull --ff-only` 与 `sh scripts/nas-local-update.sh` 流程；无需改媒体挂载、清理原图或重启 Docker 守护进程。缩略图会自动建立，已有 NFO 与原图可直接使用。
+
+## 2026-10-10：AutoBangumi 能力整合范围 A
+
+- 将完整功能清单、P0–P3 优先级、用户选定的范围 A、四阶段实施及验收边界单独写入 [`autobangumi-integration-plan.md`](./autobangumi-integration-plan.md)。官方 AutoBangumi 当前文档以 RSS 自动追番、qBittorrent 下载和标准季集目录整理为核心；CyMediaFlow 复用已有作品匹配及刮削功能，不复制其播放器。
+- 后端增加 RSS 源、追番规则、发布候选、下载任务、文件操作和活动事件六类持久化记录。RSS/Atom 拉取有超时与 2 MiB 大小上限；发布名使用现有解析器，低置信度、多集、冲突或不符规则的发布不自动下载。RSS 地址中的查询串和路径在列表中脱敏，qBittorrent 密码不经读取接口返回。
+- qBittorrent Web API 适配器负责登录、连接测试、添加种子、按稳定标签去重、查任务/文件及下载器内改名。任务先记录再提交，未完成任务可在进程重启后继续对账；整理前检查本地媒体根目录与文件名边界，目标已存在时待审核而非覆盖。默认不启用自动下载，不处理已有媒体库文件。
+- 前端左侧新增 AutoBangumi 入口，页面提供“追番规则／RSS／发布候选／下载任务／活动记录”子标签；设置页新增独立的自动追番分区，分别配置 qBittorrent 和可选 RSS 代理。先预览与审核，再启用定时下载。
+- 在隔离临时目录与模拟下载器上完成 RSS → 匹配 → 下载 → 安全改名 → 媒体扫描端到端测试；没有对 NAS 媒体目录、真实 RSS 或真实 qBittorrent 执行添加/改名。后端 114 项测试、前端 40 项测试、Ruff、TypeScript 与生产构建通过。本地 Edge 打开五个子标签和设置页无脚本异常，390 px 手机视口没有横向溢出。真实 NAS 的 Web API、RSS 与共享挂载尚待部署后单条目验收。

@@ -56,9 +56,12 @@ describe("SettingsPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("shows the effective media root after switching it", async () => {
-    const fetchMock = vi.fn()
-      .mockImplementationOnce(() => response({ data: settings, request_id: "get" }))
-      .mockImplementationOnce(() => response({ data: { ...settings, media_root: "/media/anime" }, request_id: "put" }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/automation/settings") return response({ data: { enabled: false, interval_minutes: 15, qb_url: "", qb_username: "", qb_save_root: "", rss_proxy_url: "", qb_password_configured: false }, request_id: "automation" });
+      return init?.method === "PUT"
+        ? response({ data: { ...settings, media_root: "/media/anime" }, request_id: "put" })
+        : response({ data: settings, request_id: "get" });
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderPage();
 
@@ -67,22 +70,25 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
     expect(await screen.findByText("设置已生效，正在扫描 /media/anime")).toBeTruthy();
-    const request = fetchMock.mock.calls[1];
+    const request = fetchMock.mock.calls.find((call) => call[1]?.method === "PUT")!;
     expect(request[0]).toBe("/api/v1/settings");
     expect(JSON.parse(String(request[1]?.body)).media_root).toBe("anime");
   });
 
   it("shows the backend path validation message", async () => {
-    const fetchMock = vi.fn()
-      .mockImplementationOnce(() => response({ data: settings, request_id: "get" }))
-      .mockImplementationOnce(() => response({
-        error: {
-          code: "MEDIA_ROOT_OUTSIDE_ALLOWED_ROOT",
-          message: "Docker/NAS 请填写容器路径 /media 或其子目录",
-          details: { allowed_media_root: "/media" },
-        },
-        request_id: "put",
-      }, 400));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/automation/settings") return response({ data: { enabled: false, interval_minutes: 15, qb_url: "", qb_username: "", qb_save_root: "", rss_proxy_url: "", qb_password_configured: false }, request_id: "automation" });
+      return init?.method === "PUT"
+        ? response({
+            error: {
+              code: "MEDIA_ROOT_OUTSIDE_ALLOWED_ROOT",
+              message: "Docker/NAS 请填写容器路径 /media 或其子目录",
+              details: { allowed_media_root: "/media" },
+            },
+            request_id: "put",
+          }, 400)
+        : response({ data: settings, request_id: "get" });
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderPage();
 

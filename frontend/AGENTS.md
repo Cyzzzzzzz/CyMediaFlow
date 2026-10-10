@@ -11,7 +11,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 ## Durable prototype design feedback
 
 - The chosen direction is “Compact Media Shelf”: a poster-first library with a restrained white/soft-gray palette, violet accents, generous rounding, and minimal shadows.
-- Keep the left rail limited to exactly two destinations: 首页 and 设置. Do not evolve the home screen into a dashboard or add operational widgets.
+- Keep the left rail limited to 首页, AutoBangumi, and 设置. Place automation features in compact sub-tabs under AutoBangumi; do not evolve the home screen into a dashboard or add operational widgets.
 - Each poster represents one anime. Keep card metadata to one title and one compact status line.
 - Clicking a poster opens a right-side drawer occupying roughly two-thirds of the viewport. Configure matching, season/episode mapping, naming, and Emby scraping in rounded accordion sections inside the drawer.
 - Preserve the selected mockup at `../docs/design/selected-home-drawer.png` as visual source of truth for future iterations.
