@@ -44,6 +44,29 @@ describe("AutomationPage", () => {
     return render(<QueryClientProvider client={client}><AutomationPage /></QueryClientProvider>);
   }
 
+  it("lets missing unconfirmed downloads retry and hides retry after qB confirmation", async () => {
+    const user = userEvent.setup();
+    let confirmed = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/downloads/7/retry")) {
+        expect(init?.method).toBe("POST");
+        confirmed = true;
+        return response({ confirmed: true, state: "submitted", error: null });
+      }
+      if (url.endsWith("/downloads")) return response([{ id: 7, release_id: 1, subscription_id: 1, state: confirmed ? "submitted" : "missing", torrent_hash: confirmed ? "hash" : null, progress: 0, save_path: "/downloads/Hero", error: confirmed ? null : "qBittorrent 未创建任务" }]);
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mount();
+    await user.click(screen.getByRole("tab", { name: "下载任务" }));
+    expect(await screen.findByText("未找到任务")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试添加" }));
+    expect(await screen.findByText("已确认创建")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试添加" })).toBeNull();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/downloads/7/retry"))).toHaveLength(1);
+  });
+
   it("prefills new rules from settings and persists tag edits through the shared editor", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

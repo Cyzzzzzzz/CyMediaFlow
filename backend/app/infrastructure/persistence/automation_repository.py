@@ -243,6 +243,10 @@ class AutomationRepository:
                 )
             )
 
+    def get_download(self, download_id: int) -> AutomationDownloadRecord | None:
+        with self._factory() as session:
+            return session.get(AutomationDownloadRecord, download_id)
+
     def create_download(
         self,
         release_id: int,

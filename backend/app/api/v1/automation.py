@@ -210,6 +210,11 @@ async def sync_downloads(request: Request, automation: Automation) -> dict:
     return ok(request, {"synced": True})
 
 
+@router.post("/downloads/{download_id}/retry")
+async def retry_download(download_id: int, request: Request, automation: Automation) -> dict:
+    return ok(request, await automation.retry_download(download_id))
+
+
 @router.post("/run")
 async def run_cycle(request: Request, automation: Automation) -> dict:
     if not automation.get_config().enabled:

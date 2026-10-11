@@ -5,6 +5,7 @@ import json
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -27,8 +28,9 @@ from app.domain.automation_subscription import (
     valid_poster_url,
 )
 from app.domain.keywords import normalize_keywords
-from app.infrastructure.automation.qbittorrent import QbittorrentClient
+from app.infrastructure.automation.qbittorrent import QbittorrentClient, QbittorrentError
 from app.infrastructure.automation.rss import HttpRssClient, validate_feed_url
+from app.infrastructure.automation.torrent_source import TorrentSourceError
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
 from app.infrastructure.persistence.automation_repository import AutomationRepository
 from app.infrastructure.persistence.settings_repository import SqlAlchemySettingsRepository
@@ -196,7 +198,9 @@ class AutomationService:
         password = self._settings.get("automation_qb_password") or ""
         if not config.qb_url or not config.qb_username or not password:
             raise DomainError("DOWNLOADER_NOT_CONFIGURED", "请先在自动追番设置里配置 qBittorrent")
-        return QbittorrentClient(config.qb_url, config.qb_username, password)
+        return QbittorrentClient(
+            config.qb_url, config.qb_username, password, config.rss_proxy_url or None
+        )
 
     async def test_downloader(self) -> str:
         try:
@@ -331,7 +335,7 @@ class AutomationService:
             for rule in self._repo.list_subscriptions(feed.id)
             if rule.enabled and not subscription_options(rule)["archived"]
         ]
-        accepted = 0
+        accepted = pending = failed = 0
         config = self.get_config()
         for entry in entries:
             analysis = analyze_release(entry.title)
@@ -344,7 +348,12 @@ class AutomationService:
                     "parsed": analysis.json(),
                 },
             )
-            if self._repo.get_download_by_release(release.id):
+            previous = self._repo.get_download_by_release(release.id)
+            if previous and not self._can_retry(previous):
+                pending += not previous.torrent_hash and previous.state in {
+                    "submitted",
+                    "confirming",
+                }
                 continue
             matches = [
                 rule for rule in rules if match_subscription(analysis, rule, entry.title) is None
@@ -367,14 +376,27 @@ class AutomationService:
             elif not config.enabled or not feed.enabled:
                 self._repo.set_release_decision(release.id, "ready", "自动下载尚未启用")
             else:
-                if await self._submit(release, matches[0], config):
+                if previous:
+                    if await self._retry_job(previous, release, matches[0]):
+                        accepted += 1
+                elif await self._submit(release, matches[0], config):
                     accepted += 1
+                current = self._repo.get_download_by_release(release.id)
+                if current:
+                    pending += current.state == "confirming"
+                    failed += current.state in {"retry", "missing"}
         self._repo.add_event(
             "rss_refresh",
-            f"{feed.name}：读取 {len(entries)} 条，提交 {accepted} 条",
+            f"{feed.name}：读取 {len(entries)} 条，确认创建 {accepted} 条，"
+            f"等待确认 {pending} 条，失败 {failed} 条",
             feed_id=feed.id,
         )
-        return {"fetched": len(entries), "submitted": accepted}
+        return {
+            "fetched": len(entries),
+            "submitted": accepted,
+            "pending": pending,
+            "failed": failed,
+        }
 
     async def _submit(self, release: object, rule: object, config: AutomationConfig) -> bool:
         season = effective_season(rule, release.parsed.get("season"))
@@ -395,27 +417,106 @@ class AutomationService:
                 "episode": int(release.parsed["episode"]) + rule.episode_offset,
             },
         )
-        self._repo.set_release_decision(release.id, "queued", None)
+        self._repo.set_release_decision(release.id, "confirming", "正在提交，等待下载器确认")
         return await self._send_job(job, release.download_url)
 
     async def _send_job(self, job: object, url: str) -> bool:
+        sending = False
+        acknowledged = False
         try:
             qb = self._qb()
             present = await qb.by_tag(job.qb_tag)
             if not present:
+                self._repo.update_download(job.id, state="confirming", error=None)
+                sending = True
                 await qb.add(url, job.save_path, job.qb_tag)
-            self._repo.update_download(job.id, state="submitted", error=None)
-            self._repo.add_event(
-                "download_added", f"已向 qBittorrent 提交任务 #{job.id}", download_id=job.id
+                acknowledged = True
+                present = await qb.by_tag(job.qb_tag)
+            if present:
+                return self._confirm_job(job, present)
+            self._repo.set_release_decision(
+                job.release_id, "confirming", "等待 qBittorrent 创建任务"
             )
-            return True
+            self._repo.add_event(
+                "download_pending",
+                f"任务 #{job.id} 请求已发送，等待 qBittorrent 确认",
+                download_id=job.id,
+            )
+            return False
         except Exception as exc:
-            self._repo.update_download(job.id, state="retry", error="下载器添加失败；待重试")
-            self._repo.add_event(
-                "download_error", f"任务 #{job.id} 添加失败；待重试", download_id=job.id
-            )
+            known_error = isinstance(exc, TorrentSourceError | QbittorrentError)
+            definite_failure = known_error and not acknowledged
+            message = str(exc) if known_error else "下载器请求失败；请同步状态核对后重试"
+            state = "retry" if definite_failure or not sending else "confirming"
+            self._repo.update_download(job.id, state=state, error=message)
+            self._repo.set_release_decision(job.release_id, state, message)
+            self._repo.add_event("download_error", f"任务 #{job.id}：{message}", download_id=job.id)
             logger.warning("Downloader add failed for job %s: %s", job.id, type(exc).__name__)
             return False
+
+    def _confirm_job(self, job: object, matches: list[dict]) -> bool:
+        if len(matches) != 1 or not matches[0].get("hash"):
+            self._review(job, "下载器标签未对应唯一有效任务，请人工核对")
+            return False
+        self._repo.update_download(
+            job.id, state="submitted", torrent_hash=str(matches[0]["hash"]), error=None
+        )
+        self._repo.set_release_decision(job.release_id, "queued", None)
+        if not job.torrent_hash:
+            self._repo.add_event(
+                "download_added", f"已在 qBittorrent 确认创建任务 #{job.id}", download_id=job.id
+            )
+        return True
+
+    @staticmethod
+    def _confirmation_expired(job: object) -> bool:
+        updated = job.updated_at.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - updated).total_seconds() >= 120
+
+    @classmethod
+    def _can_retry(cls, job: object) -> bool:
+        if job.torrent_hash:
+            return False
+        if job.state in {"planned", "retry", "missing"}:
+            return True
+        if job.state in {"submitted", "confirming", "retry_sync"}:
+            return cls._confirmation_expired(job)
+        return False
+
+    async def _retry_job(self, job: object, release: object, rule: object) -> bool:
+        previous_rule = self._repo.get_subscription(job.subscription_id)
+        if job.subscription_id != rule.id and previous_rule and not previous_rule.deleted:
+            return False
+        # Keep the original path/naming snapshot and stable qB tag on every retry.
+        self._repo.update_download(job.id, subscription_id=rule.id)
+        return await self._send_job(job, release.download_url)
+
+    async def retry_download(self, download_id: int) -> dict:
+        async with self._lock:
+            job = self._repo.get_download(download_id)
+            if job is None:
+                raise DomainError("DOWNLOAD_NOT_FOUND", "下载任务不存在", 404)
+            if not self._can_retry(job):
+                raise DomainError(
+                    "DOWNLOAD_NOT_RETRYABLE", "任务仍在确认中或已在下载器创建，请先同步状态", 409
+                )
+            if not self.get_config().enabled:
+                raise DomainError("AUTOMATION_DISABLED", "请先在设置中启用自动追番")
+            release = self._repo.get_release(job.release_id)
+            feed = self._repo.get_feed(release.feed_id) if release else None
+            if feed is None or feed.deleted or not feed.enabled:
+                raise DomainError("FEED_DISABLED", "请先恢复并启用对应 RSS")
+            matches = [
+                rule
+                for rule in self._repo.list_subscriptions(feed.id)
+                if rule.enabled
+                and match_subscription(analyze_release(release.title), rule, release.title) is None
+            ]
+            if len(matches) != 1:
+                raise DomainError("SUBSCRIPTION_NOT_UNIQUE", "请保留一条启用且匹配此发布的追番规则")
+            confirmed = await self._retry_job(job, release, matches[0])
+            current = self._repo.get_download(job.id)
+            return {"confirmed": confirmed, "state": current.state, "error": current.error}
 
     async def run_once(self) -> dict:
         if self._lock.locked():
@@ -439,13 +540,39 @@ class AutomationService:
     async def _sync_downloads(self) -> None:
         for job in self._repo.list_pending_downloads():
             release = self._repo.get_release(job.release_id)
-            if job.state == "retry" and release is not None:
+            rule = self._repo.get_subscription(job.subscription_id)
+            feed = self._repo.get_feed(release.feed_id) if release else None
+            if (
+                job.state in {"retry", "planned"}
+                and not job.torrent_hash
+                and (job.state == "planned" or self._confirmation_expired(job))
+                and release is not None
+                and self.get_config().enabled
+                and rule
+                and not rule.deleted
+                and rule.enabled
+                and not subscription_options(rule)["archived"]
+                and feed
+                and not feed.deleted
+                and feed.enabled
+                and match_subscription(analyze_release(release.title), rule, release.title) is None
+            ):
                 await self._send_job(job, release.download_url)
                 continue
             try:
                 qb = self._qb()
                 matches = await qb.by_tag(job.qb_tag)
                 if not matches:
+                    if job.state not in {"missing", "retry", "planned"} and (
+                        job.torrent_hash or self._can_retry(job)
+                    ):
+                        message = (
+                            "曾创建的任务已不在 qBittorrent 中，保留下载记录，请人工核对"
+                            if job.torrent_hash
+                            else "qBittorrent 未创建任务；请检查种子来源及 RSS 代理后重试"
+                        )
+                        self._repo.update_download(job.id, state="missing", error=message)
+                        self._repo.set_release_decision(job.release_id, "missing", message)
                     continue
                 if len(matches) != 1:
                     self._review(job, "下载器标签对应多个任务")
@@ -454,10 +581,19 @@ class AutomationService:
                 torrent_hash = str(torrent.get("hash") or "")
                 if not torrent_hash:
                     continue
+                if job.torrent_hash and job.torrent_hash != torrent_hash:
+                    self._review(job, "下载器任务哈希已变化，请人工核对")
+                    continue
+                if not job.torrent_hash:
+                    self._confirm_job(job, matches)
                 progress = max(0, min(100, round(float(torrent.get("progress") or 0) * 100)))
                 if progress < 100:
                     self._repo.update_download(
-                        job.id, torrent_hash=torrent_hash, state="downloading", progress=progress
+                        job.id,
+                        torrent_hash=torrent_hash,
+                        state="downloading",
+                        progress=progress,
+                        error=None,
                     )
                     continue
                 self._repo.update_download(
@@ -470,6 +606,7 @@ class AutomationService:
 
     def _review(self, job: object, reason: str) -> None:
         self._repo.update_download(job.id, state="review", error=reason)
+        self._repo.set_release_decision(job.release_id, "review", reason)
         self._repo.add_event("review", f"任务 #{job.id}：{reason}", download_id=job.id)
 
     async def _organize(self, job: object, torrent_hash: str, qb: QbittorrentClient) -> None:

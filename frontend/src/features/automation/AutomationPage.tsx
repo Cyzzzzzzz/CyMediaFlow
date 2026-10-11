@@ -62,7 +62,7 @@ function RssPanel() {
   const [message, setMessage] = useState("");
   const save = useMutation({ mutationFn: () => automationApi.saveFeed(editing, { name, url: url || null, enabled: true }), onSuccess: () => { client.invalidateQueries({ queryKey: ["automation", "feeds"] }); setEditing(null); setName(""); setUrl(""); setMessage("RSS 已保存"); }, onError: (e) => setMessage(e.message) });
   const preview = useMutation({ mutationFn: automationApi.previewFeed, onSuccess: (_data, id) => { setPreviewId(id); client.invalidateQueries({ queryKey: ["automation", "feeds"] }); }, onError: (e) => setMessage(e.message) });
-  const refresh = useMutation({ mutationFn: automationApi.refreshFeed, onSuccess: (result) => { client.invalidateQueries({ queryKey: ["automation"] }); setMessage(`已读取 ${result.fetched} 条，提交 ${result.submitted} 条`); }, onError: (e) => setMessage(e.message) });
+  const refresh = useMutation({ mutationFn: automationApi.refreshFeed, onSuccess: (result) => { client.invalidateQueries({ queryKey: ["automation"] }); setMessage(`已读取 ${result.fetched} 条，确认创建 ${result.submitted} 条，等待确认 ${result.pending ?? 0} 条，失败 ${result.failed ?? 0} 条`); }, onError: (e) => setMessage(e.message) });
   const toggle = useMutation({ mutationFn: (feed: Feed) => automationApi.saveFeed(feed.id, { name: feed.name, url: null, enabled: !feed.enabled }), onSuccess: () => client.invalidateQueries({ queryKey: ["automation", "feeds"] }) });
   const remove = useMutation({ mutationFn: automationApi.deleteFeed, onSuccess: () => client.invalidateQueries({ queryKey: ["automation"] }) });
   return <section className="automation-panel">
@@ -88,16 +88,23 @@ function DownloadsPanel({ ruleId, onClear }: { ruleId: number | null; onClear: (
   const downloads = useQuery({ queryKey: ["automation", "downloads"], queryFn: automationApi.downloads });
   const releases = useQuery({ queryKey: ["automation", "releases"], queryFn: automationApi.releases });
   const sync = useMutation({ mutationFn: automationApi.syncDownloads, onSuccess: () => client.invalidateQueries({ queryKey: ["automation"] }) });
-  return <section className="automation-panel"><div className="automation-panel-head"><div><h2>下载任务</h2><p>这里显示由 CyMediaFlow 添加的 qBittorrent 任务。</p></div><button type="button" className="secondary-button" onClick={() => sync.mutate()} disabled={sync.isPending}><ArrowsClockwise size={16} />同步状态</button></div>
+  const retry = useMutation({ mutationFn: automationApi.retryDownload, onSuccess: () => client.invalidateQueries({ queryKey: ["automation"] }) });
+  return <section className="automation-panel"><div className="automation-panel-head"><div><h2>下载任务</h2><p>查到 qBittorrent 实际任务后才确认创建；长时间等待时可同步状态后重试。</p></div><button type="button" className="secondary-button" onClick={() => sync.mutate()} disabled={sync.isPending || retry.isPending}><ArrowsClockwise size={16} />同步状态</button></div>
     {ruleId !== null ? <p className="automation-note">只显示规则 #{ruleId} 的任务 <button type="button" className="quiet-button" onClick={onClear}>查看全部</button></p> : null}
     {sync.isError ? <p role="alert" className="automation-note error">{sync.error.message}</p> : null}
-    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "organized" ? "已整理" : job.state === "review" ? "待审核" : job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "waiting_files" ? "等待文件" : job.state}</span></article>)}</div>
+    {retry.isError ? <p role="alert" className="automation-note error">{retry.error.message}</p> : null}
+    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "submitted" && !job.torrent_hash ? "等待确认" : downloadLabels[job.state] ?? job.state}</span>{!job.torrent_hash && ["retry", "missing"].includes(job.state) ? <button type="button" className="secondary-button" disabled={sync.isPending || retry.isPending} onClick={() => retry.mutate(job.id)}>{retry.isPending && retry.variables === job.id ? "重试中…" : "重试添加"}</button> : null}</article>)}</div>
     {!downloads.data?.some((job) => ruleId === null || job.subscription_id === ruleId) ? <div className="page-state">还没有自动下载任务。</div> : null}
   </section>;
 }
 
+const downloadLabels: Record<string, string> = {
+  planned: "待提交", confirming: "等待确认", submitted: "已确认创建", retry: "添加失败",
+  missing: "未找到任务", retry_sync: "同步失败", waiting_files: "等待文件", organizing: "整理中", organized: "已整理", review: "待审核",
+};
 const decisionLabels: Record<string, string> = {
-  new: "待分析", ready: "已匹配", skipped: "已跳过", review: "待审核", queued: "已加入下载",
+  new: "待分析", ready: "已匹配", skipped: "已跳过", review: "待审核", queued: "已确认创建",
+  confirming: "等待确认", retry: "添加失败", missing: "未找到任务",
 };
 
 function ReleasesPanel() {

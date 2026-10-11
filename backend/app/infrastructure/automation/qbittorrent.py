@@ -4,6 +4,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.infrastructure.automation.torrent_source import fetch_torrent
+
 
 class QbittorrentError(Exception):
     pass
@@ -12,7 +14,9 @@ class QbittorrentError(Exception):
 class QbittorrentClient:
     """Small qB Web API adapter. Every operation authenticates before using its session."""
 
-    def __init__(self, base_url: str, username: str, password: str) -> None:
+    def __init__(
+        self, base_url: str, username: str, password: str, torrent_proxy_url: str | None = None
+    ) -> None:
         parsed = urlparse(base_url)
         if (
             parsed.scheme not in {"http", "https"}
@@ -24,6 +28,7 @@ class QbittorrentClient:
         self._base_url = base_url.rstrip("/") + "/api/v2/"
         self._username = username
         self._password = password
+        self._torrent_proxy_url = torrent_proxy_url
 
     async def _session(self) -> httpx.AsyncClient:
         client = httpx.AsyncClient(base_url=self._base_url, timeout=20.0, trust_env=False)
@@ -52,22 +57,34 @@ class QbittorrentClient:
             await client.aclose()
 
     async def add(self, url: str, save_path: str, tag: str) -> bool:
+        # HTTP URL additions are asynchronous in qB: Ok. only acknowledges fetching.
+        # Fetch through our RSS proxy first, then upload metainfo over the LAN session.
+        content = (
+            await fetch_torrent(url, self._torrent_proxy_url)
+            if urlparse(url).scheme.lower() in {"http", "https"}
+            else None
+        )
         client = await self._session()
         try:
             response = await client.post(
                 "torrents/add",
                 data={
-                    "urls": url,
+                    "urls": url if content is None else "",
                     "savepath": save_path,
                     "tags": tag,
                     "autoTMM": "false",
                     "contentLayout": "NoSubfolder",
                 },
+                files={"torrents": ("release.torrent", content, "application/x-bittorrent")}
+                if content is not None
+                else None,
             )
             if response.status_code not in {200, 202}:
                 raise QbittorrentError(f"qBittorrent 拒绝任务（HTTP {response.status_code}）")
             if response.text.strip() == "Ok.":
                 return True
+            if response.text.strip() == "Fails.":
+                raise QbittorrentError("qBittorrent 拒绝添加；种子可能已存在或无效")
             try:
                 result = response.json()
             except ValueError as exc:
@@ -86,7 +103,9 @@ class QbittorrentClient:
             response = await client.get("torrents/info", params={"tag": tag})
             response.raise_for_status()
             result = response.json()
-            return result if isinstance(result, list) else []
+            if not isinstance(result, list) or any(not isinstance(item, dict) for item in result):
+                raise QbittorrentError("qBittorrent 返回无效的任务列表")
+            return result
         finally:
             await client.aclose()
 

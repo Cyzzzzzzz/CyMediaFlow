@@ -51,8 +51,8 @@ export function AutomationSettings() {
       <label className="proxy-field"><span>密码</span><input type="password" value={form.qb_password} onChange={(e) => update("qb_password", e.target.value)} placeholder={config.data?.qb_password_configured ? "已配置；留空保持不变" : "请输入 qBittorrent 密码"} autoComplete="new-password" /></label>
       {config.data?.qb_password_configured ? <label className="toggle-row"><span>清除已保存的下载器密码</span><input type="checkbox" checked={form.clear_qb_password} onChange={(e) => update("clear_qb_password", e.target.checked)} /></label> : null}
       <label className="proxy-field"><span>下载器视角的保存根目录</span><input value={form.qb_save_root} onChange={(e) => update("qb_save_root", e.target.value)} placeholder="/downloads/Bangumi" /></label>
-      <label className="proxy-field"><span>RSS 代理（可选）</span><input value={form.rss_proxy_url} onChange={(e) => update("rss_proxy_url", e.target.value)} placeholder="http://192.168.5.124:20181" /></label>
-      <p className="settings-inline-hint">RSS 代理只用于抓取订阅，不影响 Bangumi、TMDB 或局域网内的 qBittorrent。</p>
+      <label className="proxy-field"><span>RSS / 种子文件代理（可选）</span><input value={form.rss_proxy_url} onChange={(e) => update("rss_proxy_url", e.target.value)} placeholder="http://192.168.5.124:20181" /></label>
+      <p className="settings-inline-hint">用于获取 RSS 和 HTTP 种子文件；种子随后上传到 qBittorrent。磁力链接的数据下载仍由 qBittorrent 负责。</p>
       <p className="settings-inline-hint">该目录必须与上方 CyMediaFlow 媒体目录指向同一份 NAS 文件。例如 qB 看见 /downloads/Bangumi，而 CyMediaFlow 看见 /media。下载器连接测试会使用已保存的设置，请先保存。</p>
       <KeywordTags label="默认排除词" value={form.default_exclude_keywords} onChange={(words) => update("default_exclude_keywords", words)} disabled={config.isPending || save.isPending} hint="回车添加，点击标签修改，× 删除。用于新建追番规则的预填；已保存规则保留各自的排除词。" />
       <div className="automation-actions">
@@ -62,7 +62,7 @@ export function AutomationSettings() {
       {save.isSuccess ? <p className="automation-note success">设置已保存</p> : null}
       {save.isError ? <p className="automation-note error">{save.error.message}</p> : null}
       {config.isError ? <p role="alert" className="automation-note error">{config.error.message}</p> : null}
-      {test.isSuccess ? <p className="automation-note success">连接成功：qBittorrent {test.data.version}</p> : null}
+      {test.isSuccess ? <p className="automation-note success">连接成功：qBittorrent {test.data.version}（登录与版本查询通过，尚未验证任务创建）</p> : null}
       {test.isError ? <p className="automation-note error">{test.error.message}</p> : null}
     </div>
   </section>;

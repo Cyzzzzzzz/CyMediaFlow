@@ -221,7 +221,8 @@ def test_rule_edit_roundtrip_archive_language_and_offsets(tmp_path: Path) -> Non
             ]
         )
         downloader = SimpleNamespace(
-            by_tag=AsyncMock(return_value=[]), add=AsyncMock(return_value=True)
+            by_tag=AsyncMock(side_effect=[[], [{"hash": "test", "progress": 0}]]),
+            add=AsyncMock(return_value=True),
         )
         automation._qb = lambda: downloader
         client.put(
