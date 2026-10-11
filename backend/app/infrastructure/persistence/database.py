@@ -13,6 +13,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -98,6 +100,7 @@ class AutomationSubscriptionRecord(Base):
     exclude_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    options_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class AutomationReleaseRecord(Base):
@@ -130,6 +133,7 @@ class AutomationDownloadRecord(Base):
     state: Mapped[str] = mapped_column(String(30), default="planned")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(String(1000))
+    naming_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -179,3 +183,14 @@ def create_session_factory(database_url: str) -> sessionmaker[Session]:
 def initialize_database(factory: sessionmaker[Session]) -> None:
     factory.kw["bind"].connect().close()
     Base.metadata.create_all(factory.kw["bind"])
+    # Additive upgrade for installations created before the subscription shelf.
+    with factory.kw["bind"].begin() as connection:
+        for table, column in (
+            ("automation_subscriptions", "options_json"),
+            ("automation_downloads", "naming_json"),
+        ):
+            columns = {item["name"] for item in inspect(connection).get_columns(table)}
+            if column not in columns:
+                connection.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {column} JSON NOT NULL DEFAULT '{{}}'")
+                )

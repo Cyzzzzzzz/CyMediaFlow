@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
+from app.api.automation_schemas import (
+    FeedAnalysisRequest,
+    FeedSubscribeRequest,
+    SubscriptionMetadataSearch,
+    SubscriptionUpdate,
+)
 from app.api.response import ok
-from app.application.automation_service import AutomationService, public_feed, public_subscription
+from app.application.automation_service import AutomationService, public_feed
 from app.container import Container
 from app.core.errors import DomainError
 
@@ -35,19 +43,6 @@ class ConfigUpdate(BaseModel):
 class FeedUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     url: str | None = None
-    enabled: bool = True
-
-
-class SubscriptionUpdate(BaseModel):
-    feed_id: int
-    title: str = Field(min_length=1, max_length=180)
-    folder_name: str = Field(default="", max_length=180)
-    aliases: list[str] = Field(default_factory=list)
-    season: int = Field(default=1, ge=0, le=99)
-    episode_offset: int = Field(default=0, ge=-999, le=999)
-    preferred_group: str | None = None
-    preferred_resolution: str | None = None
-    exclude_keywords: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -99,7 +94,53 @@ async def refresh_feed(feed_id: int, request: Request, automation: Automation) -
 
 @router.get("/subscriptions")
 def list_subscriptions(request: Request, automation: Automation) -> dict:
-    return ok(request, [public_subscription(row) for row in automation._repo.list_subscriptions()])
+    return ok(request, automation.list_subscriptions())
+
+
+@router.post("/feeds/analyze")
+async def analyze_subscription(body: FeedAnalysisRequest, request: Request) -> dict:
+    return ok(
+        request,
+        await request.app.state.container.automation_subscriptions.analyze(**body.model_dump()),
+    )
+
+
+@router.post("/subscriptions/confirm")
+def confirm_subscription(body: FeedSubscribeRequest, request: Request) -> dict:
+    return ok(
+        request, request.app.state.container.automation_subscriptions.subscribe(**body.model_dump())
+    )
+
+
+@router.post("/metadata/search")
+async def search_subscription_metadata(body: SubscriptionMetadataSearch, request: Request) -> dict:
+    return ok(
+        request,
+        await request.app.state.container.automation_subscriptions.metadata_search(
+            **body.model_dump()
+        ),
+    )
+
+
+@router.get("/poster")
+async def subscription_poster(
+    request: Request,
+    url: str = Query(max_length=2048),
+    width: int = Query(default=320, ge=64, le=640),
+) -> Response:
+    container = request.app.state.container
+    path = await container.subscription_artwork.get(url)
+    return await run_in_threadpool(container.image_files.response, request, path, width)
+
+
+@router.get("/subscriptions/{subscription_id}/poster")
+def local_subscription_poster(
+    subscription_id: int, request: Request, automation: Automation
+) -> Response:
+    path = automation.local_subscription_poster(subscription_id)
+    if path is None:
+        raise DomainError("POSTER_NOT_FOUND", "尚无本地海报", 404)
+    return request.app.state.container.image_files.response(request, path, 320)
 
 
 @router.post("/subscriptions")

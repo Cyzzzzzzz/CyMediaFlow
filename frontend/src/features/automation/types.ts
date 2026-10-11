@@ -6,11 +6,30 @@ export type Feed = {
   id: number; name: string; url: string; enabled: boolean; status: string;
   last_checked_at: string | null; last_error: string | null;
 };
-export type Subscription = {
-  id: number; feed_id: number; title: string; folder_name: string;
+export type SubscriptionDraft = {
+  title: string; folder_name: string;
   aliases: string[]; season: number; episode_offset: number;
   preferred_group: string | null; preferred_resolution: string | null;
   exclude_keywords: string[]; enabled: boolean;
+  season_offset: number; preferred_subtitle: "CHS" | "CHT" | null;
+  archived: boolean; poster_url: string | null; year: number | null;
+  source_title: string; source: string | null; subtitle: string | null;
+  resolution: string | null; release_group: string | null;
+  air_weekday: number | null; provider: "bangumi" | "tmdb" | null; provider_id: string | null;
+};
+export type Subscription = SubscriptionDraft & {
+  id: number; feed_id: number; local_poster_url?: string | null;
+};
+export type SubscriptionMatch = {
+  provider: "bangumi" | "tmdb"; external_id: string; title: string;
+  original_title: string | null; year: number | null; image_url: string | null;
+};
+export type FeedCandidate = {
+  rule: SubscriptionDraft; entry_count: number; examples: string[];
+  matches: SubscriptionMatch[]; warning: string | null;
+};
+export type FeedAnalysis = {
+  candidates: FeedCandidate[]; total_entries: number; unrecognized: number; truncated: boolean;
 };
 export type ReleaseAnalysis = {
   title: string | null; season: number | null; episode: number | null;

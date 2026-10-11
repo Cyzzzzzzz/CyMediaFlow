@@ -1,7 +1,10 @@
 import { apiRequest } from "../../api/client";
-import type { Download, Event, Feed, Release, ReleaseAnalysis, Subscription } from "./types";
+import type { Download, Event, Feed, FeedAnalysis, Release, ReleaseAnalysis, Subscription, SubscriptionDraft, SubscriptionMatch } from "./types";
 
 export const automationApi = {
+  analyze: (value: { url: string; parser: "bangumi" | "tmdb" | "parser" }) => apiRequest<FeedAnalysis>("/api/v1/automation/feeds/analyze", { method: "POST", body: JSON.stringify(value) }),
+  subscribe: (value: { url: string; name: string; rules: SubscriptionDraft[] }) => apiRequest<{ created: number; automation_enabled: boolean }>("/api/v1/automation/subscriptions/confirm", { method: "POST", body: JSON.stringify(value) }),
+  searchMetadata: (provider: "bangumi" | "tmdb", query: string) => apiRequest<SubscriptionMatch[]>("/api/v1/automation/metadata/search", { method: "POST", body: JSON.stringify({ provider, query }) }),
   feeds: () => apiRequest<Feed[]>("/api/v1/automation/feeds"),
   saveFeed: (id: number | null, value: { name: string; url: string | null; enabled: boolean }) => apiRequest<Feed>(id ? `/api/v1/automation/feeds/${id}` : "/api/v1/automation/feeds", { method: id ? "PUT" : "POST", body: JSON.stringify(value) }),
   deleteFeed: (id: number) => apiRequest<{ deleted: boolean }>(`/api/v1/automation/feeds/${id}`, { method: "DELETE" }),

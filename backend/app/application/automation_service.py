@@ -19,6 +19,12 @@ from app.domain.automation import (
     subtitle_tag,
     target_stem,
 )
+from app.domain.automation_subscription import (
+    effective_season,
+    split_subscription_values,
+    subscription_options,
+    valid_poster_url,
+)
 from app.infrastructure.automation.qbittorrent import QbittorrentClient
 from app.infrastructure.automation.rss import HttpRssClient, validate_feed_url
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
@@ -55,20 +61,23 @@ def public_feed(record: object) -> dict:
 
 def public_subscription(record: object) -> dict:
     return {
-        key: getattr(record, key)
-        for key in (
-            "id",
-            "feed_id",
-            "title",
-            "folder_name",
-            "aliases",
-            "season",
-            "episode_offset",
-            "preferred_group",
-            "preferred_resolution",
-            "exclude_keywords",
-            "enabled",
-        )
+        **subscription_options(record),
+        **{
+            key: getattr(record, key)
+            for key in (
+                "id",
+                "feed_id",
+                "title",
+                "folder_name",
+                "aliases",
+                "season",
+                "episode_offset",
+                "preferred_group",
+                "preferred_resolution",
+                "exclude_keywords",
+                "enabled",
+            )
+        },
     }
 
 
@@ -216,8 +225,15 @@ class AutomationService:
         existing = self._repo.get_subscription(subscription_id) if subscription_id else None
         if subscription_id and (existing is None or existing.deleted):
             raise DomainError("SUBSCRIPTION_NOT_FOUND", "追番规则不存在", 404)
+        values = self.prepare_subscription(values)
+        return public_subscription(self._repo.save_subscription(subscription_id, values))
+
+    @staticmethod
+    def prepare_subscription(values: dict) -> dict:
+        values = dict(values)
         try:
-            values["title"] = safe_component(values["title"])
+            safe_component(values["title"])
+            values["title"] = values["title"].strip()
             values["folder_name"] = safe_component(values["folder_name"] or values["title"])
         except ValueError as exc:
             raise DomainError("INVALID_SUBSCRIPTION_PATH", str(exc)) from exc
@@ -227,7 +243,39 @@ class AutomationService:
         ]
         if values["season"] < 0 or values["season"] > 99 or abs(values["episode_offset"]) > 999:
             raise DomainError("INVALID_EPISODE_MAPPING", "季号或集数偏移超出允许范围")
-        return public_subscription(self._repo.save_subscription(subscription_id, values))
+        if not 0 <= values["season"] + values.get("season_offset", 0) <= 99:
+            raise DomainError("INVALID_EPISODE_MAPPING", "季度偏移后的季号须介于 0 与 99")
+        if not valid_poster_url(values.get("poster_url")):
+            raise DomainError("INVALID_POSTER_URL", "请使用 Bangumi 或 TMDB 的海报地址")
+        source_title = values.get("source_title", "").strip()
+        if source_title and source_title not in values["aliases"]:
+            values["aliases"].append(source_title)
+        return split_subscription_values(values)
+
+    def list_subscriptions(self) -> list[dict]:
+        result = []
+        for record in self._repo.list_subscriptions():
+            item = public_subscription(record)
+            item["local_poster_url"] = (
+                f"/api/v1/automation/subscriptions/{record.id}/poster"
+                if self.local_subscription_poster(record.id)
+                else None
+            )
+            result.append(item)
+        return result
+
+    def local_subscription_poster(self, subscription_id: int) -> Path | None:
+        record = self._repo.get_subscription(subscription_id)
+        if record is None or record.deleted:
+            return None
+        folder = (self._media_root / record.folder_name).resolve(strict=False)
+        if not path_is_within(folder, self._media_root):
+            return None
+        for name in ("poster.jpg", "poster.png", "poster.webp", "folder.jpg"):
+            path = (folder / name).resolve(strict=False)
+            if path_is_within(path, self._media_root) and path.is_file():
+                return path
+        return None
 
     def delete_subscription(self, subscription_id: int) -> None:
         if self._repo.get_subscription(subscription_id) is None:
@@ -265,7 +313,11 @@ class AutomationService:
             logger.warning("RSS fetch failed for feed %s: %s", feed.id, type(exc).__name__)
             raise DomainError("RSS_UNAVAILABLE", "RSS 连接或 XML 解析失败", 503) from exc
         self._repo.update_feed_status(feed.id, "connected", None)
-        rules = [rule for rule in self._repo.list_subscriptions(feed.id) if rule.enabled]
+        rules = [
+            rule
+            for rule in self._repo.list_subscriptions(feed.id)
+            if rule.enabled and not subscription_options(rule)["archived"]
+        ]
         accepted = 0
         config = self.get_config()
         for entry in entries:
@@ -312,14 +364,24 @@ class AutomationService:
         return {"fetched": len(entries), "submitted": accepted}
 
     async def _submit(self, release: object, rule: object, config: AutomationConfig) -> bool:
-        season = 0 if release.parsed.get("season") == 0 else rule.season
+        season = effective_season(rule, release.parsed.get("season"))
         folder = safe_component(rule.folder_name)
         save_path = f"{config.qb_save_root}/{folder}/Season {season}"
         local_path = (self._media_root / folder / f"Season {season}").resolve(strict=False)
         if not path_is_within(local_path, self._media_root):
             self._repo.set_release_decision(release.id, "review", "目标目录越界")
             return False
-        job = self._repo.create_download(release.id, rule.id, save_path, str(local_path))
+        job = self._repo.create_download(
+            release.id,
+            rule.id,
+            save_path,
+            str(local_path),
+            {
+                "title": rule.title,
+                "season": season,
+                "episode": int(release.parsed["episode"]) + rule.episode_offset,
+            },
+        )
         self._repo.set_release_decision(release.id, "queued", None)
         return await self._send_job(job, release.download_url)
 
@@ -419,11 +481,15 @@ class AutomationService:
                 raise ValueError("本地下载目录越界")
             if len(video_path.parts) != 1:
                 raise ValueError("多层种子文件目录需要人工整理")
-            episode = int(release.parsed["episode"]) + rule.episode_offset
-            season = 0 if release.parsed.get("season") == 0 else rule.season
+            # New rule edits affect future downloads, never an already queued task's target.
+            naming = job.naming_json or {}
+            episode = int(
+                naming.get("episode", int(release.parsed["episode"]) + rule.episode_offset)
+            )
+            season = int(naming.get("season", effective_season(rule, release.parsed.get("season"))))
             if episode < 0:
                 raise ValueError("调整后的集号无效")
-            stem = target_stem(rule.title, season, episode)
+            stem = target_stem(naming.get("title", rule.title), season, episode)
             media_files = [
                 file
                 for file in files

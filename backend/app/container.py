@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.automation_service import AutomationService
+from app.application.automation_subscription_service import AutomationSubscriptionService
 from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
@@ -22,6 +23,7 @@ from app.application.subtitle_service import SubtitleMatchService
 from app.core.config import Settings
 from app.core.path_safety import path_is_within
 from app.domain.filename_parser import FilenameParser
+from app.infrastructure.automation.artwork import SubscriptionArtworkCache
 from app.infrastructure.filesystem.ignore_marker import IgnoreMarkerManager
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
 from app.infrastructure.filesystem.nfo_reader import FileSystemNfoCatalog
@@ -64,6 +66,8 @@ class Container:
     scheduled_refresh_service: ScheduledRefreshService
     subtitle_service: SubtitleMatchService
     automation_service: AutomationService
+    automation_subscriptions: AutomationSubscriptionService
+    subscription_artwork: SubscriptionArtworkCache
 
 
 def build_container(settings: Settings) -> Container:
@@ -194,6 +198,10 @@ def build_container(settings: Settings) -> Container:
         scheduled_refresh_service=scheduled_refresh_service,
         subtitle_service=subtitle_service,
         automation_service=automation_service,
+        automation_subscriptions=AutomationSubscriptionService(automation_service, providers),
+        subscription_artwork=SubscriptionArtworkCache(
+            settings.data_dir / "subscription-artwork", remote_artwork
+        ),
     )
 
 
