@@ -1,6 +1,7 @@
 export type AutomationConfig = {
   enabled: boolean; interval_minutes: number; qb_url: string; qb_username: string;
   qb_save_root: string; rss_proxy_url: string; qb_password_configured: boolean;
+  default_exclude_keywords: string[];
 };
 export type Feed = {
   id: number; name: string; url: string; enabled: boolean; status: string;
@@ -27,6 +28,7 @@ export type SubscriptionMatch = {
 export type FeedCandidate = {
   rule: SubscriptionDraft; entry_count: number; examples: string[];
   matches: SubscriptionMatch[]; warning: string | null;
+  versions?: number[]; subtitle_variants?: (string | null)[];
 };
 export type FeedAnalysis = {
   candidates: FeedCandidate[]; total_entries: number; unrecognized: number; truncated: boolean;
@@ -34,6 +36,7 @@ export type FeedAnalysis = {
 export type ReleaseAnalysis = {
   title: string | null; season: number | null; episode: number | null;
   group: string | null; resolution: string | null; confidence: number; warnings: string[];
+  version?: number | null; subtitle?: string | null;
 };
 export type Release = {
   id: number; feed_id: number; title: string; analysis: ReleaseAnalysis;

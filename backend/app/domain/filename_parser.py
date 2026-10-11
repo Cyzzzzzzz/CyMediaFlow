@@ -64,6 +64,15 @@ SUBTITLE_FLAGS = {"forced", "sdh", "default"}
 class FilenameParser:
     """Pure, deterministic parser. It performs no file or network I/O."""
 
+    def parse_release(self, title: str) -> ParsedMediaInfo:
+        """RSS text is not a path: retain multilingual titles separated by slashes."""
+        value = unicodedata.normalize("NFKC", title)
+        value = value.translate(str.maketrans({"【": "[", "】": "]", "/": "／", "\\": "＼"}))
+        # RSS titles need not have a file extension; a dotted title is still a title.
+        if Path(value).suffix.casefold() not in VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS:
+            value += ".mkv"
+        return self.parse(value)
+
     def parse(self, filename: str, parent_directory: str | None = None) -> ParsedMediaInfo:
         traces: list[ParseTraceStep] = []
         warnings: list[str] = []
@@ -318,7 +327,7 @@ class FilenameParser:
         if not segments:
             return None
         candidate = segments[0].strip()
-        if not candidate or candidate.isdigit():
+        if not candidate or candidate.isdigit() or BRACKET_EPISODE.fullmatch(f"[{candidate}]"):
             return None
         if any(
             pattern.fullmatch(candidate)

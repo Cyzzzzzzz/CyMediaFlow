@@ -38,6 +38,7 @@ class ConfigUpdate(BaseModel):
     rss_proxy_url: str = ""
     qb_password: str | None = None
     clear_qb_password: bool = False
+    default_exclude_keywords: list[str] | None = Field(default=None, max_length=100)
 
 
 class FeedUpdate(BaseModel):
@@ -145,7 +146,10 @@ def local_subscription_poster(
 
 @router.post("/subscriptions")
 def add_subscription(body: SubscriptionUpdate, request: Request, automation: Automation) -> dict:
-    return ok(request, automation.save_subscription(None, body.model_dump()))
+    values = body.model_dump()
+    if "exclude_keywords" not in body.model_fields_set:
+        values["exclude_keywords"] = automation.default_exclude_keywords()
+    return ok(request, automation.save_subscription(None, values))
 
 
 @router.put("/subscriptions/{subscription_id}")

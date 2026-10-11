@@ -1,7 +1,8 @@
 import { apiRequest } from "../../api/client";
-import type { Download, Event, Feed, FeedAnalysis, Release, ReleaseAnalysis, Subscription, SubscriptionDraft, SubscriptionMatch } from "./types";
+import type { AutomationConfig, Download, Event, Feed, FeedAnalysis, Release, ReleaseAnalysis, Subscription, SubscriptionDraft, SubscriptionMatch } from "./types";
 
 export const automationApi = {
+  settings: () => apiRequest<AutomationConfig>("/api/v1/automation/settings"),
   analyze: (value: { url: string; parser: "bangumi" | "tmdb" | "parser" }) => apiRequest<FeedAnalysis>("/api/v1/automation/feeds/analyze", { method: "POST", body: JSON.stringify(value) }),
   subscribe: (value: { url: string; name: string; rules: SubscriptionDraft[] }) => apiRequest<{ created: number; automation_enabled: boolean }>("/api/v1/automation/subscriptions/confirm", { method: "POST", body: JSON.stringify(value) }),
   searchMetadata: (provider: "bangumi" | "tmdb", query: string) => apiRequest<SubscriptionMatch[]>("/api/v1/automation/metadata/search", { method: "POST", body: JSON.stringify({ provider, query }) }),

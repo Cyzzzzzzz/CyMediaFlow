@@ -46,7 +46,10 @@ export function AddRssDialog({ onClose, onSuccess }: { onClose: () => void; onSu
         {current ? <>
           {current.warning ? <p className="automation-note" role="status">{current.warning}</p> : null}
           <SubscriptionFields key={active} value={current.rule} matches={current.matches} onChange={(value) => setCandidates((old) => old.map((item, index) => index === active ? { ...item, rule: value } : item))} />
-          <details className="subscription-section subscription-examples"><summary>发布样本 <span>{current.entry_count} 条</span></summary><div className="subscription-section-body">{current.examples.map((example) => <p key={example}>{example}</p>)}</div></details>
+          <details className="subscription-section subscription-examples"><summary>发布样本 <span>{current.entry_count} 条</span></summary><div className="subscription-section-body">
+            {current.versions?.length ? <p className="automation-note">修订版本：{current.versions.map((version) => `v${version}`).join(" / ")}（无标记按 v1 计）；字幕：{current.rule.subtitle || "未识别"}。同集修订版与语言版本共用规则，可在高级设置中筛选。</p> : null}
+            {current.examples.map((example) => <p key={example}>{example}</p>)}
+          </div></details>
           <p className="automation-note">确认后保存 RSS 和规则；启用自动追番时，下一轮检查会下载源内所有匹配且尚未提交的发布。多字幕组规则会分别生效，请只选择需要的版本。</p>
         </> : <div className="page-state">没有识别到可订阅的单集发布。可返回检查地址，或在 RSS 页保存源后手动添加追番规则。</div>}
       </>}

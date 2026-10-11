@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { apiRequest } from "../../api/client";
+import { KeywordTags } from "../../components/KeywordTags";
+import { automationApi } from "./api";
 import type { AutomationConfig } from "./types";
 import "./automation.css";
 
@@ -12,12 +14,13 @@ type Form = Omit<AutomationConfig, "qb_password_configured"> & {
 const blank: Form = {
   enabled: false, interval_minutes: 15, qb_url: "", qb_username: "",
   qb_save_root: "", rss_proxy_url: "", qb_password: "", clear_qb_password: false,
+  default_exclude_keywords: [],
 };
 
 export function AutomationSettings() {
   const client = useQueryClient();
   const [form, setForm] = useState<Form>(blank);
-  const config = useQuery({ queryKey: ["automation", "settings"], queryFn: () => apiRequest<AutomationConfig>("/api/v1/automation/settings") });
+  const config = useQuery({ queryKey: ["automation", "settings"], queryFn: automationApi.settings });
   const save = useMutation({
     mutationFn: () => apiRequest<AutomationConfig>("/api/v1/automation/settings", { method: "PUT", body: JSON.stringify({ ...form, qb_password: form.qb_password || null }) }),
     onSuccess: (data) => {
@@ -33,6 +36,7 @@ export function AutomationSettings() {
       qb_url: config.data.qb_url, qb_username: config.data.qb_username,
       qb_save_root: config.data.qb_save_root, rss_proxy_url: config.data.rss_proxy_url,
       qb_password: "", clear_qb_password: false,
+      default_exclude_keywords: config.data.default_exclude_keywords ?? [],
     });
   }, [config.data]);
   const update = <K extends keyof Form>(key: K, value: Form[K]) => setForm((old) => ({ ...old, [key]: value }));
@@ -50,12 +54,14 @@ export function AutomationSettings() {
       <label className="proxy-field"><span>RSS 代理（可选）</span><input value={form.rss_proxy_url} onChange={(e) => update("rss_proxy_url", e.target.value)} placeholder="http://192.168.5.124:20181" /></label>
       <p className="settings-inline-hint">RSS 代理只用于抓取订阅，不影响 Bangumi、TMDB 或局域网内的 qBittorrent。</p>
       <p className="settings-inline-hint">该目录必须与上方 CyMediaFlow 媒体目录指向同一份 NAS 文件。例如 qB 看见 /downloads/Bangumi，而 CyMediaFlow 看见 /media。下载器连接测试会使用已保存的设置，请先保存。</p>
+      <KeywordTags label="默认排除词" value={form.default_exclude_keywords} onChange={(words) => update("default_exclude_keywords", words)} disabled={config.isPending || save.isPending} hint="回车添加，点击标签修改，× 删除。用于新建追番规则的预填；已保存规则保留各自的排除词。" />
       <div className="automation-actions">
         <button type="button" className="secondary-button" onClick={() => test.mutate()} disabled={test.isPending}>测试下载器</button>
-        <button type="button" className="primary-button" onClick={() => save.mutate()} disabled={save.isPending}>保存自动追番设置</button>
+        <button type="button" className="primary-button" onClick={() => save.mutate()} disabled={save.isPending || config.isPending || config.isError}>保存自动追番设置</button>
       </div>
       {save.isSuccess ? <p className="automation-note success">设置已保存</p> : null}
       {save.isError ? <p className="automation-note error">{save.error.message}</p> : null}
+      {config.isError ? <p role="alert" className="automation-note error">{config.error.message}</p> : null}
       {test.isSuccess ? <p className="automation-note success">连接成功：qBittorrent {test.data.version}</p> : null}
       {test.isError ? <p className="automation-note error">{test.error.message}</p> : null}
     </div>

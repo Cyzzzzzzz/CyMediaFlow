@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { automationApi } from "./api";
 import { AutomationDialog } from "./AutomationDialog";
@@ -6,12 +6,22 @@ import { SubscriptionFields } from "./SubscriptionFields";
 import { emptySubscription, validSubscription } from "./subscriptionForm";
 import type { Feed, Subscription } from "./types";
 
-export function SubscriptionEditor({ rule, feeds, siblings, onSelect, onClose, onDownloads }: {
+type Props = {
   rule: Subscription | null; feeds: Feed[]; siblings: Subscription[];
   onSelect: (rule: Subscription) => void; onClose: () => void; onDownloads: (id: number) => void;
-}) {
+};
+
+export function SubscriptionEditor(props: Props) {
+  const config = useQuery({ queryKey: ["automation", "settings"], queryFn: automationApi.settings, enabled: !props.rule, staleTime: 0 });
+  if (!props.rule && !config.data) return <AutomationDialog title="添加追番规则" onClose={props.onClose}>
+    {config.isError ? <p role="alert" className="automation-note error">{config.error.message} <button type="button" className="secondary-button" onClick={() => void config.refetch()}>重试</button></p> : <p className="automation-note">正在读取默认排除词…</p>}
+  </AutomationDialog>;
+  return <SubscriptionEditorForm {...props} defaultExcludes={config.data?.default_exclude_keywords ?? []} />;
+}
+
+function SubscriptionEditorForm({ rule, feeds, siblings, onSelect, onClose, onDownloads, defaultExcludes }: Props & { defaultExcludes: string[] }) {
   const client = useQueryClient();
-  const [form, setForm] = useState(() => ({ ...emptySubscription(), ...rule }));
+  const [form, setForm] = useState(() => ({ ...emptySubscription(defaultExcludes), ...rule }));
   const [feedId, setFeedId] = useState(rule?.feed_id ?? feeds[0]?.id ?? 0);
   const [deleting, setDeleting] = useState(false);
   const success = () => { void client.invalidateQueries({ queryKey: ["automation"] }); onClose(); };

@@ -1,10 +1,10 @@
 import type { SubscriptionDraft, SubscriptionMatch } from "./types";
 
-export function emptySubscription(): SubscriptionDraft {
+export function emptySubscription(defaultExcludes: string[] = []): SubscriptionDraft {
   return {
     title: "", folder_name: "", aliases: [], season: 1, season_offset: 0, episode_offset: 0,
     preferred_group: null, preferred_resolution: null, preferred_subtitle: null,
-    exclude_keywords: [], enabled: true, archived: false, poster_url: null, year: null,
+    exclude_keywords: [...defaultExcludes], enabled: true, archived: false, poster_url: null, year: null,
     source_title: "", source: null, subtitle: null, resolution: null, release_group: null,
     air_weekday: null, provider: null, provider_id: null,
   };

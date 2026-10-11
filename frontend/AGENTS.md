@@ -11,6 +11,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 ## Durable prototype design feedback
 
 - AutoBangumi opens on a subscribed-anime poster shelf, not a rules dashboard. Keep a prominent "新增 RSS 订阅" action; analyze RSS before confirming subscriptions. Clicking a poster and editing from the rules sub-tab must open the same right-side editor, with title/year/season visible and filtering/offset/download preferences collapsed. Group multiple rules for one title/season behind one poster. Preserve the separate local-media homepage.
+- Show AutoBangumi exclusion keywords as editable tags: Enter adds, clicking a tag edits, and × removes; preserve IME input. Keep per-rule keywords inside collapsed advanced settings and global defaults in the existing AutoBangumi settings section. Defaults prefill new rules only; they must not overwrite saved rules.
 
 - The chosen direction is “Compact Media Shelf”: a poster-first library with a restrained white/soft-gray palette, violet accents, generous rounding, and minimal shadows.
 - Keep the left rail limited to 首页, AutoBangumi, and 设置. Place automation features in compact sub-tabs under AutoBangumi; do not evolve the home screen into a dashboard or add operational widgets.

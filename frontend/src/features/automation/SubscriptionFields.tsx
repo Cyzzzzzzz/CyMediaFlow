@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
+import { KeywordTags } from "../../components/KeywordTags";
 import { automationApi } from "./api";
 import { SubscriptionPoster } from "./SubscriptionPoster";
 import { applyMetadata } from "./subscriptionForm";
@@ -40,7 +41,7 @@ export function SubscriptionFields({ value, onChange, localPoster, matches = [] 
       <div className="subscription-section-body">
         <label>下载目录名<input value={value.folder_name} onChange={(e) => set("folder_name", e.target.value)} placeholder="留空使用作品标题" maxLength={180} /></label>
         <label>标题别名（每行一个）<textarea rows={2} value={value.aliases.join("\n")} onChange={(e) => set("aliases", e.target.value.split("\n"))} placeholder="用于匹配 RSS 的英文／日文标题" /></label>
-        <label>排除词（每行一个）<textarea rows={2} value={value.exclude_keywords.join("\n")} onChange={(e) => set("exclude_keywords", e.target.value.split("\n"))} placeholder="发布标题包含任意排除词时跳过；不是正则表达式" /></label>
+        <KeywordTags label="排除词" value={value.exclude_keywords} onChange={(words) => set("exclude_keywords", words)} hint="回车添加，点击标签修改，× 删除。发布标题包含任意排除词即跳过，忽略大小写。" />
         <div className="automation-form-grid"><label>季度偏移<input type="number" min={-99} max={99} value={value.season_offset} onChange={(e) => set("season_offset", Number(e.target.value))} /></label><label>集数偏移<input type="number" min={-999} max={999} value={value.episode_offset} onChange={(e) => set("episode_offset", Number(e.target.value))} /></label></div>
         <p className="automation-note">目标季 = 季度 + 季度偏移；目标集 = 发布集号 + 集数偏移。例如发布第 13 集从 01 开始，集数偏移填 -12。特典按 S00 处理后加季度偏移，负集号不会下载。</p>
         <p className="subscription-naming-preview">{value.folder_name || value.title || "作品"} / Season {season} / {value.title || "作品"} S{String(season).padStart(2, "0")}E{episode >= 0 ? String(episode).padStart(2, "0") : "…"}.mkv <small>以发布第 1 集示例</small></p>

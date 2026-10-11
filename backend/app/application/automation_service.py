@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from app.domain.automation_subscription import (
     subscription_options,
     valid_poster_url,
 )
+from app.domain.keywords import normalize_keywords
 from app.infrastructure.automation.qbittorrent import QbittorrentClient
 from app.infrastructure.automation.rss import HttpRssClient, validate_feed_url
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
@@ -43,6 +45,7 @@ class AutomationConfig:
     qb_password_configured: bool = False
     qb_save_root: str = ""
     rss_proxy_url: str = ""
+    default_exclude_keywords: tuple[str, ...] = ()
 
 
 def public_feed(record: object) -> dict:
@@ -107,6 +110,12 @@ class AutomationService:
             qb_password_configured=bool(get("automation_qb_password")),
             qb_save_root=get("automation_qb_save_root") or "",
             rss_proxy_url=get("automation_rss_proxy_url") or "",
+            default_exclude_keywords=tuple(self.default_exclude_keywords()),
+        )
+
+    def default_exclude_keywords(self) -> list[str]:
+        return normalize_keywords(
+            json.loads(self._settings.get("automation_default_exclude_keywords") or "[]")
         )
 
     def save_config(
@@ -120,6 +129,7 @@ class AutomationService:
         qb_password: str | None,
         rss_proxy_url: str = "",
         clear_qb_password: bool = False,
+        default_exclude_keywords: list[str] | None = None,
     ) -> AutomationConfig:
         if not 1 <= interval_minutes <= 1440:
             raise DomainError("INVALID_INTERVAL", "刷新周期须介于 1 与 1440 分钟")
@@ -166,6 +176,11 @@ class AutomationService:
             "automation_qb_save_root": qb_save_root,
             "automation_rss_proxy_url": rss_proxy_url,
         }
+        if default_exclude_keywords is not None:
+            values["automation_default_exclude_keywords"] = json.dumps(
+                normalize_keywords(default_exclude_keywords),
+                ensure_ascii=False,
+            )
         for key, value in values.items():
             self._settings.set(key, value)
         if qb_password is not None or clear_qb_password:
@@ -238,9 +253,7 @@ class AutomationService:
         except ValueError as exc:
             raise DomainError("INVALID_SUBSCRIPTION_PATH", str(exc)) from exc
         values["aliases"] = [alias.strip() for alias in values["aliases"] if alias.strip()]
-        values["exclude_keywords"] = [
-            word.strip() for word in values["exclude_keywords"] if word.strip()
-        ]
+        values["exclude_keywords"] = normalize_keywords(values["exclude_keywords"])
         if values["season"] < 0 or values["season"] > 99 or abs(values["episode_offset"]) > 999:
             raise DomainError("INVALID_EPISODE_MAPPING", "季号或集数偏移超出允许范围")
         if not 0 <= values["season"] + values.get("season_offset", 0) <= 99:

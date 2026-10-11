@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AutomationPage } from "./AutomationPage";
@@ -42,6 +43,31 @@ describe("AutomationPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(<QueryClientProvider client={client}><AutomationPage /></QueryClientProvider>);
   }
+
+  it("prefills new rules from settings and persists tag edits through the shared editor", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/feeds")) return response([feed]);
+      if (url.endsWith("/settings")) return response({ default_exclude_keywords: ["720p", "繁日"] });
+      if (url.endsWith("/subscriptions")) return init?.method === "POST" ? response(JSON.parse(String(init.body))) : response([]);
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mount();
+    await user.click(screen.getByRole("tab", { name: "追番规则" }));
+    await user.click(await screen.findByRole("button", { name: "添加规则" }));
+    await user.type(await screen.findByLabelText("作品标题"), "Hero");
+    await user.click(screen.getByText("高级设置"));
+    await user.click(screen.getByRole("button", { name: "删除排除词 720p" }));
+    await user.click(screen.getByRole("button", { name: "编辑排除词 繁日" }));
+    await user.clear(screen.getByLabelText("排除词"));
+    await user.type(screen.getByLabelText("排除词"), "简日{Enter}");
+    await user.click(screen.getByRole("button", { name: "应用修改" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const saved = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(saved?.[1]?.body)).exclude_keywords).toEqual(["简日"]);
+  });
 
   it("opens the shelf first and shares a cancel-safe editor with the rules tab", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

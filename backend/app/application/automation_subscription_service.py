@@ -56,6 +56,7 @@ class AutomationSubscriptionService:
                 "RSS_UNAVAILABLE", "RSS 连接或解析失败，请检查地址及 RSS 代理", 503
             ) from exc
         grouped: dict[tuple, dict] = {}
+        default_excludes = self._automation.default_exclude_keywords()
         unrecognized = 0
         for entry in entries:
             analysis = analyze_release(entry.title)
@@ -68,11 +69,11 @@ class AutomationSubscriptionService:
                 unrecognized += 1
                 continue
             key = (
-                analysis.title,
+                normalized_title(analysis.title),
                 analysis.season if analysis.season is not None else 1,
-                analysis.group,
-                analysis.resolution,
-                analysis.subtitle,
+                normalized_title(analysis.group or ""),
+                normalized_title(analysis.resolution or ""),
+                analysis.year,
             )
             if key not in grouped:
                 grouped[key] = {
@@ -80,7 +81,7 @@ class AutomationSubscriptionService:
                         "title": analysis.title,
                         "source_title": analysis.title,
                         "folder_name": "",
-                        "aliases": [analysis.title],
+                        "aliases": list(analysis.aliases or (analysis.title,)),
                         "season": analysis.season if analysis.season is not None else 1,
                         "episode_offset": 0,
                         "season_offset": 0,
@@ -89,7 +90,7 @@ class AutomationSubscriptionService:
                         "preferred_subtitle": analysis.subtitle
                         if analysis.subtitle in {"CHS", "CHT"}
                         else None,
-                        "exclude_keywords": [],
+                        "exclude_keywords": list(default_excludes),
                         "enabled": True,
                         "year": analysis.year,
                         "source": analysis.source,
@@ -101,8 +102,32 @@ class AutomationSubscriptionService:
                     "examples": [],
                     "matches": [],
                     "warning": None,
+                    "versions": [],
+                    "subtitle_variants": [],
                 }
             group = grouped[key]
+            group["versions"] = sorted(set([*group["versions"], analysis.version or 1]))
+            if analysis.subtitle not in group["subtitle_variants"]:
+                group["subtitle_variants"].append(analysis.subtitle)
+            languages = sorted(
+                {
+                    language
+                    for variant in group["subtitle_variants"]
+                    if variant
+                    for language in variant.split("/")
+                }
+            )
+            group["rule"]["subtitle"] = "/".join(languages) or None
+            if len(group["subtitle_variants"]) > 1:
+                group["rule"]["preferred_subtitle"] = None
+            group["rule"]["aliases"] = list(
+                dict.fromkeys(
+                    [
+                        *group["rule"]["aliases"],
+                        *analysis.aliases,
+                    ]
+                )
+            )
             group["entry_count"] += 1
             if len(group["examples"]) < 3:
                 group["examples"].append(entry.title)

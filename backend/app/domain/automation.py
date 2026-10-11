@@ -25,6 +25,8 @@ class ReleaseAnalysis:
     year: int | None = None
     source: str | None = None
     subtitle: str | None = None
+    version: int | None = None
+    aliases: tuple[str, ...] = ()
 
     def json(self) -> dict:
         return {
@@ -38,11 +40,19 @@ class ReleaseAnalysis:
             "year": self.year,
             "source": self.source,
             "subtitle": self.subtitle,
+            "version": self.version,
+            "aliases": list(self.aliases),
         }
 
 
 def analyze_release(title: str) -> ReleaseAnalysis:
-    parsed: ParsedMediaInfo = FilenameParser().parse(title)
+    parsed: ParsedMediaInfo = FilenameParser().parse_release(title)
+    # Split only whitespace-delimited aliases; preserve titles like Fate/stay night.
+    aliases = tuple(
+        dict.fromkeys(
+            part.strip() for part in re.split(r"\s+/\s+", parsed.title or "") if part.strip()
+        )
+    )
     episode = (
         parsed.episode_start if parsed.episode_start is not None else parsed.absolute_episode_start
     )
@@ -57,7 +67,7 @@ def analyze_release(title: str) -> ReleaseAnalysis:
     ):
         warnings.append("MULTI_EPISODE_RELEASE")
     return ReleaseAnalysis(
-        parsed.title,
+        aliases[0] if aliases else parsed.title,
         parsed.season,
         episode,
         parsed.release_group,
@@ -67,6 +77,8 @@ def analyze_release(title: str) -> ReleaseAnalysis:
         parsed.year,
         parsed.source,
         release_subtitle(title),
+        parsed.version,
+        aliases,
     )
 
 
@@ -93,7 +105,9 @@ def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) 
     if analysis.confidence < 45 or "MULTI_EPISODE_RELEASE" in analysis.warnings:
         return "发布名置信度不足或包含多集"
     accepted = {normalized_title(rule.title), *(normalized_title(alias) for alias in rule.aliases)}
-    if normalized_title(analysis.title) not in accepted:
+    if not accepted.intersection(
+        normalized_title(title) for title in (analysis.title, *analysis.aliases)
+    ):
         return "作品标题未匹配"
     if rule.preferred_group and normalized_title(rule.preferred_group) != normalized_title(
         analysis.group or ""

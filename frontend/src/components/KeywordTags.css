@@ -1,0 +1,14 @@
+.keyword-field { display: grid; gap: 7px; min-width: 0; }
+.keyword-field > label { font-size: 12px; color: #69616f; }
+.keyword-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; min-height: 44px; border: 1px solid #ded9e7; border-radius: 12px; background: #fff; }
+.keyword-tags:focus-within { border-color: #a793e8; box-shadow: 0 0 0 3px #7156c512; }
+.keyword-tag { display: inline-flex; align-items: stretch; max-width: 100%; border-radius: 8px; background: #f1eafa; color: #745496; }
+.keyword-tag.editing { outline: 1px solid #a793e8; background: #e9ddfa; }
+.keyword-tag button { border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.keyword-tag-edit { padding: 5px 3px 5px 9px; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.keyword-tag-remove { display: grid; place-items: center; width: 28px; min-height: 28px; flex-shrink: 0; border-radius: 0 8px 8px 0; }
+.keyword-tag-remove:hover { background: #e2d4f3; }
+.keyword-tags .keyword-tags-input { flex: 1 1 150px; width: 150px; min-width: 80px; min-height: 30px; padding: 5px 7px; border: 0; box-shadow: none; outline: 0; font: inherit; font-size: 12px; background: transparent; }
+.keyword-tags-hint, .keyword-tags-error { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.keyword-tags-error { color: #b54b4b; }
+.keyword-tag button:disabled, .keyword-tags-input:disabled { cursor: default; opacity: .6; }
