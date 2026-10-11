@@ -1,0 +1,127 @@
+# AutoBangumi 订阅封面与规则弹窗
+
+更新日期：2026-10-11。此文记录订阅界面的交互修订、字段语义、源码依据与实施边界。
+
+## 1. 页面结构
+
+CyMediaFlow 的“首页”仍用于本地媒体库。左侧 **AutoBangumi** 入口的默认页面改为“订阅番剧”：每张封面代表一个作品与目标季度，不再以规则表格作为首页。
+
+- 子标签依次为：订阅番剧、追番规则、RSS、发布候选、下载任务、活动记录。
+- 右上角固定“新增 RSS 订阅”按钮，各子标签都可使用。
+- 片单支持按作品名／发布标题／别名搜索，以及订阅中／已归档切换。
+- 同标题、同目标季度的多个规则合并为一张封面；点击后可在弹窗顶部选择具体的 RSS／字幕组规则。
+- 点击封面，从右侧打开约 2/3 屏宽的编辑弹窗；手机端使用近全屏宽度。
+- “追番规则”列表的编辑按钮打开同一个弹窗，两处共用相同的数据和保存接口。
+
+订阅封面不依赖视频已经下载完成。已有规则可以使用本地作品目录的海报；新订阅可以使用 Bangumi／TMDB 匹配到的海报。
+
+## 2. 对照的 AutoBangumi 源码
+
+参考本机 `E:\MyData\003.CodeSpace\Auto_Bangumi`，沿用操作流程而非复制其 Vue 组件、数据库或接口。
+
+| AutoBangumi 文件 | 参考行为 | CyMediaFlow 实现 |
+| --- | --- | --- |
+| `webui/src/pages/index/bangumi.vue` | 封面列表、按作品和季度聚合、归档分组 | `frontend/src/features/automation/SubscriptionShelf.tsx` |
+| `webui/src/components/ab-bangumi-card.vue` | 封面点击进入规则编辑、简短状态标签 | `SubscriptionShelf.tsx`、`SubscriptionPoster.tsx` |
+| `webui/src/components/ab-add-rss.vue` | RSS 输入、解析、预览确认两步流程 | `AddRssDialog.tsx` |
+| `webui/src/components/ab-edit-rule.vue` | 草稿编辑、应用、归档、查看任务和删除 | `SubscriptionEditor.tsx` |
+| `webui/src/components/bangumi-preview.vue` | 海报、标题、年份、季度、来源标签 | `SubscriptionFields.tsx` |
+| `webui/src/hooks/useBangumiRuleForm.ts` | 新增与编辑共享字段，高级设置折叠 | `SubscriptionFields.tsx`、`subscriptionForm.ts` |
+| `backend/src/module/api/rss.py`、`backend/src/module/manager/collector.py` | 先分析，再确认订阅 | `backend/app/application/automation_subscription_service.py` |
+
+本版本保留范围 A 的安全边界。没有复制未接入的 Mikan 专用解析器、“立即补全／收集”、Movie／OVA 类型下载、直接删除种子及媒体文件等选项，详见第 7 节。
+
+## 3. 新增 RSS 的实际步骤
+
+1. 点击“新增 RSS 订阅”，填写 RSS 地址。名称可以留空，默认采用确认的第一部作品标题。
+2. 选择识别来源：Bangumi、TMDB，或“仅解析发布标题”。前两者使用现有设置页中的 token 与对应代理，不新增另一套元数据凭据。
+3. 一个源有多部番剧时勾选“聚合 RSS”。普通订阅选择一组规则；聚合源可勾选多组。**默认只选第一组，不自动全选。**
+4. 点击“解析 RSS”。这一步仅请求 RSS 和所选元数据来源，不保存订阅，不提交下载任务。
+5. 查看识别的作品、字幕组、分辨率、字幕语言和发布样本。名称不确定时展开“作品与海报匹配”，主动搜索并选择条目。模糊匹配或多个同名候选不会自动绑定。
+6. 按需调整标题、年份、季度和折叠的高级设置。聚合源可逐组点击并编辑，只有勾选的规则才会保存。
+7. 点击“确认订阅”。RSS 源与选定规则在同一数据库事务中保存，重复或并发确认不重复创建同一源内的相同规则；已有规则的自定义值不会被此次确认覆盖。
+8. 返回封面片单。若自动追番关闭，先到设置页配置和测试下载器；开启后，下一轮检查才按源和规则的启用状态处理发布，也可在 RSS 页主动刷新。
+
+注意：启用后会处理 RSS **当前包含的所有匹配且未提交发布**，并非仅订阅之后的新集。请先核对过滤条件；勾选多个字幕组代表允许多个版本，不是自动择优去重。
+
+解析失败会在弹窗内显示原因，输入保留，可重试。无可靠集号、合集或低置信度发布不会直接生成自动订阅草稿；可在 RSS 管理页保存源并预览，再手工添加规则。解析最多处理 RSS 客户端返回的 500 条发布，最多展示 30 组草稿。RSS 请求总预算 25 秒；元数据匹配最多并发 3 项、总预算 25 秒，超时保留已解析草稿，剩余匹配可手动搜索。
+
+聚合 RSS 本次只保存你勾选的规则。后续出现未订阅的新作品不会自动添加规则或下载；它们可以在发布候选中检查。
+
+## 4. 规则字段与语义
+
+| 字段 | 用途和行为 |
+| --- | --- |
+| 作品标题 | 规则展示名称，以及未来下载整理的文件标题。选择元数据条目可更新此值。 |
+| 年份 | 作品信息展示；不参与按天调度或集数偏移。 |
+| 季度 | 默认目标季号，允许 0–99；0 代表特典季。发布标题里的明确季号在首次解析时填入，未识别则默认 1，需人工核对。 |
+| 发布标题 | RSS 解析出的原作品名称，作为来源信息保留；保存时自动保留为匹配别名。 |
+| RSS 源 | 此规则只处理选中的源；列表地址脱敏，不回显 passkey 等查询参数。改源不会修改其他规则。 |
+| 作品与海报匹配 | 显示 Bangumi／TMDB ID。主动搜索后选中候选，更新标题、年份、海报，同时保留原发布名和原文名为别名；不擅自改季度。 |
+| 下载目录名 | 下载根目录下的单个作品目录。新规则留空时保存为作品标题；已有规则改标题不会自动改变原目录字段。非法文件名字符会清理。 |
+| 标题别名 | 每行一个，用于与发布标题做规范化后的完整匹配，不是宽泛的子串搜索。 |
+| 排除词 | 每行一个，发布标题包含任意词即跳过，忽略大小写；**不是正则表达式**。 |
+| 季度偏移 | 普通集目标季 =“季度”+ 偏移。解析为特典季 0 的发布先取 0，再加偏移。结果必须在 0–99 范围内。 |
+| 集数偏移 | 目标集 = 发布集号 + 偏移。例如发布 13–24 要整理为 01–12，填 `-12`。目标集为负时跳过。 |
+| 偏好字幕组 | 填写后要求字幕组匹配；空值不限。不是多个字幕组间的优先级队列。 |
+| 偏好清晰度 | 例如 `1080p`；填写后要求清晰度匹配，空值不限。 |
+| 偏好字幕 | 不限、简体 CHS、繁体 CHT；同时标注两者的发布可匹配任一偏好，语言未知时不会满足指定偏好。仅依据发布标题标记判断。 |
+| 放送星期 | 作为订阅资料保存，界面星期一至星期日对应 API 的 0–6；当前**不限制 RSS 检查时间**。 |
+| 启用此规则 | 单条规则开关，仍受 RSS 源开关和设置页自动追番总开关控制。 |
+| 归档 | 保留规则并移至归档列表，停止接收新发布。取消归档并应用后可恢复；不会暂停或删除已提交的下载任务。 |
+
+弹窗会显示示例命名。规则保存对未来任务生效；新增任务在提交时持久化标题、目标季和目标集的快照，之后改规则不会导致它的下载目录与整理文件名不一致。升级前的旧任务没有该快照，按原兼容逻辑处理，建议先完成这些任务再调整其规则。
+
+## 5. 弹窗操作
+
+- **应用修改**：一次保存草稿，成功后两处列表共同刷新。
+- **取消／Esc／点击遮罩／关闭**：放弃当前未保存草稿。提交过程中禁止重复提交或关闭。
+- **切换同作品规则**：打开所选规则的独立草稿；切换前请先保存当前修改。
+- **查看下载任务**：跳到下载任务子标签，只筛选当前规则；可切换回全部任务。该按钮不是保存操作。
+- **删除规则**：需要二次确认，只软删除该规则，保留下载记录和媒体文件，不调用下载器删除接口。
+- **归档勾选**：属于草稿修改，点击“应用修改”后才生效。
+
+弹窗提供键盘焦点限制、Esc 关闭和关闭后焦点恢复。高级设置默认收起，不占据首页或卡片空间。
+
+## 6. 持久化、图片与接口
+
+新增资料存储在 `automation_subscriptions.options_json`，任务命名快照存储在 `automation_downloads.naming_json`。启动时执行可重复的增量加列，保留原有 RSS、规则、任务和自动追番开关状态，不需要重建数据库。
+
+图片顺序为本地作品目录 `poster.jpg/png/webp` 或 `folder.jpg` → 所绑定来源的海报缓存／远程下载 → 占位图。远程图片只接受 Bangumi 与 TMDB 的受限 HTTPS 图片地址，经后端代理下载，不让浏览器直接请求外网。缓存存放在应用数据目录 `subscription-artwork`，Docker 中为 `/data/subscription-artwork`，并复用现有 320px WebP 缩略图及 ETag/304；相同海报并发请求合并，远程下载最多 4 项并发。前端优先前 6 张，其余接近可见区域后加载。
+
+打开片单或规则弹窗只读取已有配置，不自动解析 RSS 或联网搜索作品。已绑定但尚未缓存的海报会按需联网获取，不能把“不会自动搜索”等同于“完全不会请求图片来源”。
+
+新增接口：
+
+| 方法与路径 | 作用 |
+| --- | --- |
+| `POST /api/v1/automation/feeds/analyze` | 请求 `{url, parser}`，返回分组草稿、发布样本、元数据候选和提示，不持久化。 |
+| `POST /api/v1/automation/subscriptions/confirm` | 请求 `{url, name, rules}`，原子保存源和确认的规则，返回新增数量。 |
+| `POST /api/v1/automation/metadata/search` | 主动搜索 `{provider, query}`，每次最多返回 6 个精简候选。 |
+| `GET /api/v1/automation/poster` | 受限海报 URL 的持久缓存、缩略图输出。 |
+| `GET /api/v1/automation/subscriptions/{id}/poster` | 安全读取订阅对应的本地作品海报。 |
+
+原有订阅列表／新增／修改接口保留，扩展为支持表格中的资料字段。
+
+核心代码：
+
+- UI 入口：[AutomationPage.tsx](../frontend/src/features/automation/AutomationPage.tsx)
+- 表单与交互：[SubscriptionFields.tsx](../frontend/src/features/automation/SubscriptionFields.tsx)、[SubscriptionEditor.tsx](../frontend/src/features/automation/SubscriptionEditor.tsx)、[AddRssDialog.tsx](../frontend/src/features/automation/AddRssDialog.tsx)
+- 解析与确认：[automation_subscription_service.py](../backend/app/application/automation_subscription_service.py)
+- 校验与偏移：[automation_subscription.py](../backend/app/domain/automation_subscription.py)、[automation.py](../backend/app/domain/automation.py)
+- 事务与升级：[automation_repository.py](../backend/app/infrastructure/persistence/automation_repository.py)、[database.py](../backend/app/infrastructure/persistence/database.py)
+- 图片缓存：[artwork.py](../backend/app/infrastructure/automation/artwork.py)
+
+## 7. 与 AutoBangumi 的差异及部署注意
+
+这次实现的是封面订阅入口和共享规则流程，不代表 AutoBangumi 全部功能已迁入：
+
+- 识别来源使用已有 Bangumi／TMDB 适配器和 CyMediaFlow 文件名解析器，尚未提供 Mikan 专用站点解析；Nyaa、Mikan 等站点的标准 RSS 仍可作为普通源，具体标题是否可识别需要预览。
+- 保留同源精确规则准入，不自动为聚合源新作品建规则；暂不提供“一键收集缺集／历史全集补全”。
+- 不提供无法安全执行的剧集类型批量改写或合集整理；多视频种子仍待审核。
+- 删除不含删除下载器文件选项；不导入播放器。
+- 这里的来源 ID 只绑定订阅资料和海报，不自动覆盖本地作品的 NFO 刮削绑定。下载后的季集映射、NFO 与 Emby 操作仍走既有详情功能。
+
+本次需要同时升级后端与前端，保留原有 `/data` 持久卷、token 文件和媒体挂载。代码发布后沿用 [NAS 本地构建更新流程](nas-local-build-deployment.md) 或 [预构建部署流程](nas-prebuilt-deployment.md)。无需重启 Docker 守护进程、删除数据库或重新下载媒体。升级前建议备份应用数据目录。
+
+验证使用隔离数据库、已有测试图片副本、模拟 RSS／元数据／qBittorrent；没有对真实 NAS 媒体目录执行改名，没有向真实下载器添加任务。真实站点和 NAS 容器网络仍需部署后一条测试订阅验收。

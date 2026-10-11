@@ -1,13 +1,18 @@
-import { ArrowsClockwise, DownloadSimple, ListBullets, Rss, Television } from "@phosphor-icons/react";
+import { ArrowsClockwise, DownloadSimple, ListBullets, Plus, Rss, Television, SquaresFour } from "@phosphor-icons/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { automationApi } from "./api";
 import type { Feed, Subscription } from "./types";
+import { AddRssDialog } from "./AddRssDialog";
+import { SubscriptionEditor } from "./SubscriptionEditor";
+import { sameWork, SubscriptionShelf } from "./SubscriptionShelf";
 import "./automation.css";
+import "./subscriptions.css";
 
-type Tab = "rules" | "rss" | "releases" | "downloads" | "events";
+type Tab = "shelf" | "rules" | "rss" | "releases" | "downloads" | "events";
 const tabItems: { id: Tab; label: string; icon: typeof Rss }[] = [
+  { id: "shelf", label: "订阅番剧", icon: SquaresFour },
   { id: "rules", label: "追番规则", icon: Television },
   { id: "rss", label: "RSS", icon: Rss },
   { id: "releases", label: "发布候选", icon: ListBullets },
@@ -16,60 +21,34 @@ const tabItems: { id: Tab; label: string; icon: typeof Rss }[] = [
 ];
 
 export function AutomationPage() {
-  const [tab, setTab] = useState<Tab>("rules");
+  const [tab, setTab] = useState<Tab>("shelf");
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Subscription | "new" | null>(null);
+  const [downloadRule, setDownloadRule] = useState<number | null>(null);
+  const [message, setMessage] = useState("");
+  const rules = useQuery({ queryKey: ["automation", "rules"], queryFn: automationApi.rules });
+  const feeds = useQuery({ queryKey: ["automation", "feeds"], queryFn: automationApi.feeds });
   return <div className="automation-page">
-    <header className="page-header"><div><span className="eyebrow">CyMediaFlow</span><h1>AutoBangumi</h1><p className="automation-subtitle">订阅、下载与整理</p></div></header>
+    <header className="page-header automation-page-header"><div><span className="eyebrow">CyMediaFlow</span><h1>AutoBangumi</h1><p className="automation-subtitle">你的追番片单</p></div><button type="button" className="primary-button" onClick={() => setAdding(true)}><Plus size={17} />新增 RSS 订阅</button></header>
     <div className="automation-tabs" role="tablist" aria-label="自动追番功能">
       {tabItems.map(({ id, label, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}><Icon size={17} />{label}</button>)}
     </div>
-    {tab === "rules" ? <RulesPanel /> : tab === "rss" ? <RssPanel /> : tab === "releases" ? <ReleasesPanel /> : tab === "downloads" ? <DownloadsPanel /> : <EventsPanel />}
+    {message ? <div className="subscription-notice" role="status"><span>{message}</span><button type="button" className="quiet-button" onClick={() => setMessage("")}>关闭</button></div> : null}
+    {tab === "shelf" ? <SubscriptionShelf rules={rules.data ?? []} loading={rules.isLoading} error={rules.error} onEdit={setEditing} onAdd={() => setAdding(true)} /> : tab === "rules" ? <RulesPanel rules={rules.data ?? []} feeds={feeds.data ?? []} onEdit={setEditing} onAdd={() => setEditing("new")} /> : tab === "rss" ? <RssPanel /> : tab === "releases" ? <ReleasesPanel /> : tab === "downloads" ? <DownloadsPanel ruleId={downloadRule} onClear={() => setDownloadRule(null)} /> : <EventsPanel />}
+    {adding ? <AddRssDialog onClose={() => setAdding(false)} onSuccess={(text) => { setMessage(text); setAdding(false); setTab("shelf"); }} /> : null}
+    {editing !== null ? <SubscriptionEditor key={editing === "new" ? "new" : editing.id} rule={editing === "new" ? null : editing} feeds={feeds.data ?? []} siblings={editing === "new" ? [] : (rules.data ?? []).filter((item) => sameWork(item, editing))} onSelect={setEditing} onClose={() => setEditing(null)} onDownloads={(id) => { setEditing(null); setDownloadRule(id); setTab("downloads"); }} /> : null}
   </div>;
 }
 
-const emptyRule: Omit<Subscription, "id"> = {
-  feed_id: 0, title: "", folder_name: "", aliases: [], season: 1,
-  episode_offset: 0, preferred_group: null, preferred_resolution: null,
-  exclude_keywords: [], enabled: true,
-};
-
-function RulesPanel() {
-  const client = useQueryClient();
-  const rules = useQuery({ queryKey: ["automation", "rules"], queryFn: automationApi.rules });
-  const feeds = useQuery({ queryKey: ["automation", "feeds"], queryFn: automationApi.feeds });
-  const [editing, setEditing] = useState<number | null | "new">(null);
-  const [form, setForm] = useState(emptyRule);
-  const [error, setError] = useState("");
-  const save = useMutation({ mutationFn: () => automationApi.saveRule(editing === "new" ? null : editing, form), onSuccess: () => { client.invalidateQueries({ queryKey: ["automation", "rules"] }); setEditing(null); setError(""); }, onError: (cause) => setError(cause.message) });
-  const remove = useMutation({ mutationFn: automationApi.deleteRule, onSuccess: () => client.invalidateQueries({ queryKey: ["automation", "rules"] }) });
-  const start = (rule?: Subscription) => { setForm(rule ? { ...rule } : { ...emptyRule, feed_id: feeds.data?.[0]?.id ?? 0 }); setEditing(rule?.id ?? "new"); setError(""); };
-  const update = <K extends keyof typeof form>(key: K, value: typeof form[K]) => setForm((old) => ({ ...old, [key]: value }));
-
+function RulesPanel({ rules, feeds, onEdit, onAdd }: { rules: Subscription[]; feeds: Feed[]; onEdit: (rule: Subscription) => void; onAdd: () => void }) {
   return <section className="automation-panel">
-    <div className="automation-panel-head"><div><h2>追番规则</h2><p>每个规则限定一部作品和一个 RSS 源。只有匹配且通过过滤的发布才会自动下载。</p></div><button type="button" className="primary-button" onClick={() => start()} disabled={!feeds.data?.length}>添加规则</button></div>
-    {!feeds.data?.length ? <div className="page-state">请先在 RSS 子标签添加订阅源。</div> : null}
-    <div className="automation-card-list">{rules.data?.map((rule) => <article className="automation-card" key={rule.id}>
-      <div><strong>{rule.title}</strong><span>{feeds.data?.find((feed) => feed.id === rule.feed_id)?.name ?? "未知 RSS"} · Season {rule.season} {rule.preferred_group ? `· ${rule.preferred_group}` : ""}</span></div>
-      <span className={`automation-pill ${rule.enabled ? "ok" : ""}`}>{rule.enabled ? "运行中" : "已停用"}</span>
-      <button type="button" className="secondary-button" onClick={() => start(rule)}>编辑</button>
-      <button type="button" className="quiet-button" onClick={() => { if (window.confirm(`删除“${rule.title}”规则？已下载任务记录会保留。`)) remove.mutate(rule.id); }}>删除</button>
+    <div className="automation-panel-head"><div><h2>追番规则</h2><p>与封面列表共用规则。每条规则只作用于对应作品和 RSS 源。</p></div><button type="button" className="secondary-button" onClick={onAdd} disabled={!feeds.length}>添加规则</button></div>
+    <div className="automation-card-list">{rules.map((rule) => <article className="automation-card" key={rule.id}>
+      <div><strong>{rule.title}</strong><span>{feeds.find((feed) => feed.id === rule.feed_id)?.name ?? "已删除 RSS"} · Season {rule.season + rule.season_offset} {rule.preferred_group ? `· ${rule.preferred_group}` : ""}</span></div>
+      <span className={`automation-pill ${rule.enabled && !rule.archived ? "ok" : ""}`}>{rule.archived ? "已归档" : rule.enabled ? "已启用" : "已停用"}</span>
+      <button type="button" className="secondary-button" onClick={() => onEdit(rule)}>编辑</button>
     </article>)}</div>
-    {rules.isLoading ? <div className="page-state">正在读取规则…</div> : !rules.data?.length && feeds.data?.length ? <div className="page-state">还没有追番规则。</div> : null}
-    {editing !== null ? <div className="automation-overlay" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setEditing(null); }}><section className="automation-drawer" role="dialog" aria-modal="true" aria-label="追番规则">
-      <header><div><span className="eyebrow">AutoBangumi</span><h2>{editing === "new" ? "添加追番规则" : "编辑追番规则"}</h2></div><button type="button" className="quiet-button" onClick={() => setEditing(null)}>关闭</button></header>
-      <div className="automation-form">
-        <label>RSS 源<select value={form.feed_id} onChange={(e) => update("feed_id", Number(e.target.value))}>{feeds.data?.map((feed) => <option key={feed.id} value={feed.id}>{feed.name}</option>)}</select></label>
-        <label>作品标题<input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="例如：吹响吧！上低音号" /></label>
-        <label>下载目录名<input value={form.folder_name} onChange={(e) => update("folder_name", e.target.value)} placeholder="留空则使用作品标题" /></label>
-        <label>标题别名（每行一个）<textarea rows={3} value={form.aliases.join("\n")} onChange={(e) => update("aliases", e.target.value.split("\n"))} placeholder="英文／日文发布标题" /></label>
-        <div className="automation-form-grid"><label>本地季号<input type="number" min="0" max="99" value={form.season} onChange={(e) => update("season", Number(e.target.value))} /></label><label>集数偏移<input type="number" value={form.episode_offset} onChange={(e) => update("episode_offset", Number(e.target.value))} /></label></div>
-        <div className="automation-form-grid"><label>偏好字幕组<input value={form.preferred_group ?? ""} onChange={(e) => update("preferred_group", e.target.value || null)} placeholder="可不填" /></label><label>偏好清晰度<input value={form.preferred_resolution ?? ""} onChange={(e) => update("preferred_resolution", e.target.value || null)} placeholder="1080p" /></label></div>
-        <label>排除词（每行一个）<textarea rows={2} value={form.exclude_keywords.join("\n")} onChange={(e) => update("exclude_keywords", e.target.value.split("\n"))} /></label>
-        <label className="automation-check"><input type="checkbox" checked={form.enabled} onChange={(e) => update("enabled", e.target.checked)} />启用规则</label>
-        <p className="automation-note">下载器保存目录会加上“作品目录 / Season N”。不确定的标题、多视频种子和目标冲突会停在待审核。</p>
-        {error ? <p className="automation-note error">{error}</p> : null}
-        <button type="button" className="primary-button" onClick={() => save.mutate()} disabled={save.isPending || !form.title.trim() || !form.feed_id}>保存规则</button>
-      </div>
-    </section></div> : null}
+    {!rules.length ? <div className="page-state">还没有追番规则。点击“新增 RSS 订阅”开始。</div> : null}
   </section>;
 }
 
@@ -104,14 +83,16 @@ function RssPanel() {
   </section>;
 }
 
-function DownloadsPanel() {
+function DownloadsPanel({ ruleId, onClear }: { ruleId: number | null; onClear: () => void }) {
   const client = useQueryClient();
   const downloads = useQuery({ queryKey: ["automation", "downloads"], queryFn: automationApi.downloads });
   const releases = useQuery({ queryKey: ["automation", "releases"], queryFn: automationApi.releases });
   const sync = useMutation({ mutationFn: automationApi.syncDownloads, onSuccess: () => client.invalidateQueries({ queryKey: ["automation"] }) });
   return <section className="automation-panel"><div className="automation-panel-head"><div><h2>下载任务</h2><p>这里显示由 CyMediaFlow 添加的 qBittorrent 任务。</p></div><button type="button" className="secondary-button" onClick={() => sync.mutate()} disabled={sync.isPending}><ArrowsClockwise size={16} />同步状态</button></div>
-    <div className="automation-card-list">{downloads.data?.map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "organized" ? "已整理" : job.state === "review" ? "待审核" : job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "waiting_files" ? "等待文件" : job.state}</span></article>)}</div>
-    {!downloads.data?.length ? <div className="page-state">还没有自动下载任务。</div> : null}
+    {ruleId !== null ? <p className="automation-note">只显示规则 #{ruleId} 的任务 <button type="button" className="quiet-button" onClick={onClear}>查看全部</button></p> : null}
+    {sync.isError ? <p role="alert" className="automation-note error">{sync.error.message}</p> : null}
+    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "organized" ? "已整理" : job.state === "review" ? "待审核" : job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "waiting_files" ? "等待文件" : job.state}</span></article>)}</div>
+    {!downloads.data?.some((job) => ruleId === null || job.subscription_id === ruleId) ? <div className="page-state">还没有自动下载任务。</div> : null}
   </section>;
 }
 

@@ -5,6 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from app.domain.automation_subscription import effective_season, subscription_options
 from app.domain.filename import ParsedMediaInfo
 from app.domain.filename_parser import FilenameParser
 
@@ -21,6 +22,9 @@ class ReleaseAnalysis:
     resolution: str | None
     confidence: float
     warnings: tuple[str, ...]
+    year: int | None = None
+    source: str | None = None
+    subtitle: str | None = None
 
     def json(self) -> dict:
         return {
@@ -31,6 +35,9 @@ class ReleaseAnalysis:
             "resolution": self.resolution,
             "confidence": self.confidence,
             "warnings": list(self.warnings),
+            "year": self.year,
+            "source": self.source,
+            "subtitle": self.subtitle,
         }
 
 
@@ -57,6 +64,9 @@ def analyze_release(title: str) -> ReleaseAnalysis:
         parsed.resolution,
         parsed.confidence,
         tuple(warnings),
+        parsed.year,
+        parsed.source,
+        release_subtitle(title),
     )
 
 
@@ -75,6 +85,9 @@ def safe_component(value: str) -> str:
 
 
 def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) -> str | None:
+    options = subscription_options(rule)
+    if options["archived"]:
+        return "订阅已归档"
     if analysis.episode is None or analysis.title is None:
         return "缺少可靠的作品标题或集号"
     if analysis.confidence < 45 or "MULTI_EPISODE_RELEASE" in analysis.warnings:
@@ -96,7 +109,22 @@ def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) 
         return "命中排除词"
     if analysis.episode + rule.episode_offset < 0:
         return "偏移后集号无效"
+    if not 0 <= effective_season(rule, analysis.season) <= 99:
+        return "偏移后季号无效"
+    if options["preferred_subtitle"] and options["preferred_subtitle"] not in (
+        analysis.subtitle or ""
+    ):
+        return "字幕语言与偏好不符"
     return None
+
+
+def release_subtitle(title: str) -> str | None:
+    languages = []
+    if re.search(r"(?i)\b(?:CHS|SC|GB|GB2312)\b|简体|简日|簡體", title):
+        languages.append("CHS")
+    if re.search(r"(?i)\b(?:CHT|TC|BIG5)\b|繁体|繁日|繁體", title):
+        languages.append("CHT")
+    return "/".join(languages) or None
 
 
 def target_stem(title: str, season: int, episode: int) -> str:

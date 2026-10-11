@@ -81,6 +81,7 @@ def test_rss_rss_atom_and_release_policy() -> None:
             "preferred_resolution": "1080p",
             "exclude_keywords": [],
             "episode_offset": 0,
+            "season": 1,
         },
     )()
     assert match_subscription(analysis, rule, "[ANi] Hero - 01 [1080P].mkv") is None

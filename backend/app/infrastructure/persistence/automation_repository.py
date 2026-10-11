@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.domain.automation import normalized_title
 from app.infrastructure.persistence.database import (
     AutomationDownloadRecord,
     AutomationEventRecord,
@@ -106,6 +107,71 @@ class AutomationRepository:
             session.refresh(record)
             return record
 
+    def subscribe_feed(
+        self, feed_values: dict, rules: list[dict]
+    ) -> tuple[AutomationFeedRecord, list[AutomationSubscriptionRecord], int]:
+        """Atomically commit source and rules; repeated confirmation is idempotent."""
+        with self._factory() as session:
+            if session.get_bind().dialect.name == "sqlite":
+                # Serialize the read-before-insert transaction, including concurrent confirmations.
+                session.execute(text("BEGIN IMMEDIATE"))
+            feed = session.scalar(
+                select(AutomationFeedRecord).where(AutomationFeedRecord.url == feed_values["url"])
+            )
+            if feed is None:
+                feed = AutomationFeedRecord(**feed_values)
+                session.add(feed)
+                session.flush()
+            elif feed.deleted:
+                feed.deleted, feed.enabled = False, True
+            existing = list(
+                session.scalars(
+                    select(AutomationSubscriptionRecord).where(
+                        AutomationSubscriptionRecord.feed_id == feed.id,
+                        AutomationSubscriptionRecord.deleted.is_(False),
+                    )
+                )
+            )
+            selected, created = [], 0
+
+            def identity(values: dict) -> tuple:
+                options = values.get("options_json") or {}
+                return (
+                    normalized_title(options.get("source_title") or values["title"]),
+                    values["season"],
+                    values.get("preferred_group"),
+                    values.get("preferred_resolution"),
+                    options.get("preferred_subtitle"),
+                )
+
+            by_identity = {
+                identity(
+                    {
+                        "title": row.title,
+                        "season": row.season,
+                        "preferred_group": row.preferred_group,
+                        "preferred_resolution": row.preferred_resolution,
+                        "options_json": row.options_json,
+                    }
+                ): row
+                for row in existing
+            }
+            for values in rules:
+                key = identity(values)
+                record = by_identity.get(key)
+                if record is None:
+                    record = AutomationSubscriptionRecord(feed_id=feed.id, **values)
+                    session.add(record)
+                    by_identity[key] = record
+                    created += 1
+                if record not in selected:
+                    selected.append(record)
+            session.commit()
+            session.refresh(feed)
+            for record in selected:
+                session.refresh(record)
+            return feed, selected, created
+
     def soft_delete_feed(self, feed_id: int) -> None:
         with self._factory() as session:
             record = session.get(AutomationFeedRecord, feed_id)
@@ -178,7 +244,12 @@ class AutomationRepository:
             )
 
     def create_download(
-        self, release_id: int, subscription_id: int, save_path: str, local_path: str
+        self,
+        release_id: int,
+        subscription_id: int,
+        save_path: str,
+        local_path: str,
+        naming: dict | None = None,
     ) -> AutomationDownloadRecord:
         with self._factory() as session:
             record = AutomationDownloadRecord(
@@ -187,6 +258,7 @@ class AutomationRepository:
                 qb_tag=f"cymf-{release_id}",
                 save_path=save_path,
                 local_path=local_path,
+                naming_json=naming or {},
             )
             session.add(record)
             session.commit()
