@@ -146,6 +146,7 @@ log ".env 已备份到：$ENV_BACKUP"
 log "构建新版本；不会使用 --pull……"
 CYMEDIAFLOW_BACKEND_IMAGE="$NEW_BACKEND_IMAGE" \
 CYMEDIAFLOW_FRONTEND_IMAGE="$NEW_FRONTEND_IMAGE" \
+CYMEDIAFLOW_BUILD_REVISION="$CURRENT_REVISION" \
 "$COMPOSE_COMMAND" build backend frontend
 
 docker image inspect "$NEW_BACKEND_IMAGE" >/dev/null

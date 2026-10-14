@@ -26,6 +26,12 @@ class SubscriptionDraft(BaseModel):
     air_weekday: int | None = Field(default=None, ge=0, le=6)
     provider: Literal["bangumi", "tmdb"] | None = None
     provider_id: str | None = Field(default=None, max_length=100)
+    content_kind: Literal["series", "movie", "special"] = "series"
+    allow_batch: bool = False
+    revision_policy: Literal["keep", "review", "upgrade"] = "review"
+    expected_episodes: int | None = Field(default=None, ge=1, le=999)
+    first_episode: int = Field(default=1, ge=0, le=999)
+    downloader: Literal["qbittorrent", "aria2"] = "qbittorrent"
 
 
 class SubscriptionUpdate(SubscriptionDraft):

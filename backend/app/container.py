@@ -6,8 +6,13 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.access_service import AccessService
+from app.application.automation_llm import AutomationLlmParser
+from app.application.automation_operations import AutomationOperations
+from app.application.automation_search_service import AutomationSearchService
 from app.application.automation_service import AutomationService
 from app.application.automation_subscription_service import AutomationSubscriptionService
+from app.application.automation_updates import AutomationUpdates
 from app.application.episode_file_rename_service import EpisodeFileRenameService
 from app.application.episode_mapping_suggestion_service import (
     EpisodeMappingSuggestionService,
@@ -24,6 +29,7 @@ from app.core.config import Settings
 from app.core.path_safety import path_is_within
 from app.domain.filename_parser import FilenameParser
 from app.infrastructure.automation.artwork import SubscriptionArtworkCache
+from app.infrastructure.automation.feature_config import AutomationFeatureConfig
 from app.infrastructure.filesystem.ignore_marker import IgnoreMarkerManager
 from app.infrastructure.filesystem.media_scanner import FileSystemMediaCatalog
 from app.infrastructure.filesystem.nfo_reader import FileSystemNfoCatalog
@@ -34,6 +40,7 @@ from app.infrastructure.media.remote_artwork import HttpRemoteArtworkDownloader
 from app.infrastructure.persistence.automation_repository import AutomationRepository
 from app.infrastructure.persistence.binding_repository import SqlAlchemyBindingRepository
 from app.infrastructure.persistence.database import create_session_factory, initialize_database
+from app.infrastructure.persistence.feature_repository import FeatureRepository
 from app.infrastructure.persistence.result_cache import SqlAlchemyResultCache
 from app.infrastructure.persistence.settings_repository import SqlAlchemySettingsRepository
 from app.infrastructure.providers.bangumi import BangumiMetadataProvider
@@ -68,6 +75,12 @@ class Container:
     automation_service: AutomationService
     automation_subscriptions: AutomationSubscriptionService
     subscription_artwork: SubscriptionArtworkCache
+    automation_features: AutomationFeatureConfig
+    automation_operations: AutomationOperations
+    automation_search: AutomationSearchService
+    automation_updates: AutomationUpdates
+    automation_llm: AutomationLlmParser
+    access: AccessService
 
 
 def build_container(settings: Settings) -> Container:
@@ -174,6 +187,13 @@ def build_container(settings: Settings) -> Container:
         catalog,
         settings.media_root,
     )
+    feature_documents = FeatureRepository(factory)
+    features = AutomationFeatureConfig(feature_documents)
+    operations = AutomationOperations(automation_service, feature_documents)
+    updates = AutomationUpdates(automation_service, feature_documents, features, bangumi)
+    automation_service.features = features
+    automation_service.operations = operations
+    automation_service.background = updates
     return Container(
         settings=settings,
         session_factory=factory,
@@ -198,6 +218,12 @@ def build_container(settings: Settings) -> Container:
         scheduled_refresh_service=scheduled_refresh_service,
         subtitle_service=subtitle_service,
         automation_service=automation_service,
+        automation_features=features,
+        automation_operations=operations,
+        automation_search=AutomationSearchService(automation_service, feature_documents, features),
+        automation_updates=updates,
+        automation_llm=AutomationLlmParser(features, feature_documents),
+        access=AccessService(factory, feature_documents),
         automation_subscriptions=AutomationSubscriptionService(automation_service, providers),
         subscription_artwork=SubscriptionArtworkCache(
             settings.data_dir / "subscription-artwork", remote_artwork

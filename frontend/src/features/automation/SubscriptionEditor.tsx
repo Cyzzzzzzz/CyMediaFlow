@@ -4,6 +4,7 @@ import { automationApi } from "./api";
 import { AutomationDialog } from "./AutomationDialog";
 import { SubscriptionFields } from "./SubscriptionFields";
 import { emptySubscription, validSubscription } from "./subscriptionForm";
+import { BackfillPanel } from "./BackfillPanel";
 import type { Feed, Subscription } from "./types";
 
 type Props = {
@@ -37,6 +38,7 @@ function SubscriptionEditorForm({ rule, feeds, siblings, onSelect, onClose, onDo
     <fieldset className="subscription-fieldset" disabled={busy}>
       {siblings.length > 1 ? <label className="subscription-rule-picker">此番剧有 {siblings.length} 条规则<select value={rule?.id} onChange={(e) => onSelect(siblings.find((item) => item.id === Number(e.target.value))!)}>{siblings.map((item) => <option value={item.id} key={item.id}>{feeds.find((feed) => feed.id === item.feed_id)?.name ?? "已删除 RSS"} · {item.preferred_group ?? "不限字幕组"} · {item.preferred_resolution ?? "不限清晰度"}</option>)}</select></label> : null}
       <SubscriptionFields value={form} onChange={setForm} localPoster={form.poster_url === rule?.poster_url ? rule?.local_poster_url : null} />
+      {rule ? <BackfillPanel ruleId={rule.id} onOffset={episode_offset => setForm({ ...form, episode_offset })} /> : null}
       <div className="subscription-feed-row"><label>RSS 源<select value={feedId} onChange={(e) => setFeedId(Number(e.target.value))}>{!feed ? <option value={feedId}>请选择有效的 RSS 源</option> : null}{feeds.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><span title="隐藏地址中的订阅凭据">{feed?.url}</span></div>
       {rule ? <div className="subscription-secondary-actions"><button type="button" className="secondary-button" onClick={() => onDownloads(rule.id)}>查看下载任务</button><label className="automation-check"><input type="checkbox" checked={form.archived} onChange={(e) => setForm({ ...form, archived: e.target.checked })} />归档（停止接收新发布）</label></div> : null}
     </fieldset>

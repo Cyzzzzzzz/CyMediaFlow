@@ -17,6 +17,9 @@ export type SubscriptionDraft = {
   source_title: string; source: string | null; subtitle: string | null;
   resolution: string | null; release_group: string | null;
   air_weekday: number | null; provider: "bangumi" | "tmdb" | null; provider_id: string | null;
+  content_kind?: "series" | "movie" | "special"; allow_batch?: boolean;
+  revision_policy?: "keep" | "review" | "upgrade"; expected_episodes?: number | null;
+  first_episode?: number; downloader?: "qbittorrent" | "aria2";
 };
 export type Subscription = SubscriptionDraft & {
   id: number; feed_id: number; local_poster_url?: string | null;
@@ -46,6 +49,7 @@ export type Download = {
   id: number; release_id: number; subscription_id: number;
   torrent_hash: string | null; state: string; progress: number;
   error: string | null; save_path: string; created_at: string;
+  naming?: { title: string; season: number; episode: number | null; revision_of?: number | null; version?: number; downloader?: string };
 };
 export type Event = {
   id: number; kind: string; message: string; feed_id: number | null;

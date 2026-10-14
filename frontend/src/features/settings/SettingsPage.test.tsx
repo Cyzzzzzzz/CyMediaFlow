@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SettingsView } from "../../api/types";
 import { SettingsPage } from "./SettingsPage";
+vi.mock("../automation/AutomationFeatureSettings", () => ({ AutomationFeatureSettings: () => null }));
+vi.mock("../access/SecuritySettings", () => ({ SecuritySettings: () => null }));
 
 const settings: SettingsView = {
   media_root: "/media",

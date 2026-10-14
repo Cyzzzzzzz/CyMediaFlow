@@ -67,8 +67,8 @@
 .subscription-delete-confirm p { margin-top: 0; }
 .subscription-delete-confirm button + button { margin-left: 10px; }
 .subscription-dialog .danger-text { color: #af4242; }
-.subscription-dialog .quiet-button, .automation-page .quiet-button { padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
-.subscription-dialog .quiet-button:hover, .automation-page .quiet-button:hover { background: #f4f1f8; }
+.subscription-dialog .quiet-button, .automation-page .quiet-button, .automation-panel .quiet-button { padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.subscription-dialog .quiet-button:hover, .automation-page .quiet-button:hover, .automation-panel .quiet-button:hover { background: #f4f1f8; }
 .subscription-dialog .quiet-button.danger-text { color: #af4242; }
 .subscription-dialog button:disabled { cursor: default; }
 .subscription-dialog .automation-note.error { margin-top: 15px; }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.access_middleware import access_middleware
 from app.api.response import failed
 from app.api.v1.router import api_router
 from app.container import build_container
@@ -29,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await app.state.container.scheduled_refresh_service.stop()
 
     app = FastAPI(title="CyMediaFlow", version="0.1.0", lifespan=lifespan)
+    app.state.settings_update_lock = asyncio.Lock()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:4173", "http://terminal.local:4173"],
@@ -40,7 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = request.headers.get("X-Request-ID") or f"req_{uuid4().hex}"
-        response = await call_next(request)
+        response = await access_middleware(request, call_next)
         response.headers["X-Request-ID"] = request.state.request_id
         return response
 

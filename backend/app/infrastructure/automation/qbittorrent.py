@@ -134,3 +134,36 @@ class QbittorrentClient:
                 raise QbittorrentError(f"qBittorrent 文件重命名失败（HTTP {response.status_code}）")
         finally:
             await client.aclose()
+
+    async def all_tasks(self) -> list[dict]:
+        client = await self._session()
+        try:
+            response = await client.get("torrents/info")
+            response.raise_for_status()
+            return response.json()
+        finally:
+            await client.aclose()
+
+    async def action(self, torrent_hash: str, action: str) -> None:
+        endpoints = {"pause": "stop", "resume": "start", "recheck": "recheck", "remove": "delete"}
+        client = await self._session()
+        try:
+            data = {"hashes": torrent_hash}
+            if action == "remove":
+                data["deleteFiles"] = "false"
+            response = await client.post("torrents/" + endpoints[action], data=data)
+            if response.status_code == 404 and action in {"pause", "resume"}:
+                response = await client.post("torrents/" + action, data=data)
+            response.raise_for_status()
+        finally:
+            await client.aclose()
+
+    async def add_tag(self, torrent_hash: str, tag: str) -> None:
+        client = await self._session()
+        try:
+            response = await client.post(
+                "torrents/addTags", data={"hashes": torrent_hash, "tags": tag}
+            )
+            response.raise_for_status()
+        finally:
+            await client.aclose()

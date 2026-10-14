@@ -198,6 +198,7 @@ def list_downloads(request: Request, automation: Automation) -> dict:
                 "error": row.error,
                 "save_path": row.save_path,
                 "created_at": row.created_at,
+                "naming": row.naming_json,
             }
             for row in automation._repo.list_downloads()
         ],

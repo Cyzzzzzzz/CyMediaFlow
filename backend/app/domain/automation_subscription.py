@@ -16,6 +16,12 @@ OPTION_DEFAULTS = {
     "air_weekday": None,
     "provider": None,
     "provider_id": None,
+    "content_kind": "series",
+    "allow_batch": False,
+    "revision_policy": "review",
+    "expected_episodes": None,
+    "first_episode": 1,
+    "downloader": "qbittorrent",
 }
 
 

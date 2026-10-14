@@ -27,6 +27,7 @@ class ReleaseAnalysis:
     subtitle: str | None = None
     version: int | None = None
     aliases: tuple[str, ...] = ()
+    media_type: str = "series"
 
     def json(self) -> dict:
         return {
@@ -42,6 +43,7 @@ class ReleaseAnalysis:
             "subtitle": self.subtitle,
             "version": self.version,
             "aliases": list(self.aliases),
+            "media_type": self.media_type,
         }
 
 
@@ -79,6 +81,13 @@ def analyze_release(title: str) -> ReleaseAnalysis:
         release_subtitle(title),
         parsed.version,
         aliases,
+        (
+            "movie"
+            if re.search(r"(?i)\bmovie\b|剧场版|劇場版", title)
+            else "special"
+            if parsed.special_type
+            else "series"
+        ),
     )
 
 
@@ -100,9 +109,14 @@ def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) 
     options = subscription_options(rule)
     if options["archived"]:
         return "订阅已归档"
-    if analysis.episode is None or analysis.title is None:
+    single_movie = options["content_kind"] == "movie" and analysis.media_type == "movie"
+    batch = options["allow_batch"] and "MULTI_EPISODE_RELEASE" in analysis.warnings
+    if (analysis.episode is None and not single_movie and not batch) or analysis.title is None:
         return "缺少可靠的作品标题或集号"
-    if analysis.confidence < 45 or "MULTI_EPISODE_RELEASE" in analysis.warnings:
+    movie_evidence = single_movie and bool(analysis.group and analysis.resolution)
+    if (analysis.confidence < 45 and not movie_evidence) or (
+        "MULTI_EPISODE_RELEASE" in analysis.warnings and not batch
+    ):
         return "发布名置信度不足或包含多集"
     accepted = {normalized_title(rule.title), *(normalized_title(alias) for alias in rule.aliases)}
     if not accepted.intersection(
@@ -121,7 +135,7 @@ def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) 
         word.casefold() in raw_title.casefold() for word in rule.exclude_keywords if word.strip()
     ):
         return "命中排除词"
-    if analysis.episode + rule.episode_offset < 0:
+    if analysis.episode is not None and analysis.episode + rule.episode_offset < 0:
         return "偏移后集号无效"
     if not 0 <= effective_season(rule, analysis.season) <= 99:
         return "偏移后季号无效"

@@ -74,6 +74,12 @@ class FileSystemMediaCatalog:
                     hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]: path
                     for path in sorted(self._root.iterdir())
                     if path.is_dir()
+                    and path.name
+                    not in {
+                        ".cymediaflow",
+                        ".cymediaflow-downloads",
+                        ".cymediaflow-revisions",
+                    }
                 }
                 self._directory_stamp = stamp
             return self._directory_index
@@ -83,7 +89,16 @@ class FileSystemMediaCatalog:
         # Provider image caches can contain thousands of files, none are media inputs.
         files: list[Path] = []
         for parent, folders, names in os.walk(directory):
-            folders[:] = sorted(name for name in folders if name != ".cymediaflow")
+            folders[:] = sorted(
+                name
+                for name in folders
+                if name
+                not in {
+                    ".cymediaflow",
+                    ".cymediaflow-downloads",
+                    ".cymediaflow-revisions",
+                }
+            )
             files.extend(Path(parent) / name for name in sorted(names))
         return files
 

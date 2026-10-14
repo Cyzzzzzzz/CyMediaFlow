@@ -5,10 +5,10 @@
 
 [中文](#中文说明) · [English](#english)
 
-CyMediaFlow 用一套可检查、可编辑、可锁定、可恢复的流程，解决下载资源命名不统一、Bangumi/TMDB 与 Emby 识别不稳定、多季度/分段放送映射困难等问题。它不会代替下载器或播放器，而是工作在“媒体文件已经落盘”和“Emby 扫描媒体库”之间。
+CyMediaFlow 用一套可检查、可编辑、可锁定、可恢复的流程，解决下载资源命名不统一、Bangumi/TMDB 与 Emby 识别不稳定、多季度/分段放送映射困难等问题。独立的 AutoBangumi 页支持 RSS 追番、资源搜索、下载器控制与安全整理，再接入媒体管理；它不内置播放器，也不代替 qBittorrent/aria2 的传输引擎。
 
 > [!IMPORTANT]
-> 项目仍在持续开发，定位是可信局域网内的个人 NAS 工具，当前没有用户登录或权限系统。请勿直接暴露到公网。
+> 项目仍在持续开发，定位是可信局域网内的 NAS 工具。账号登录需在设置中主动启用，支持管理员/操作员/只读角色、Passkey 与 API Token。启用前 API 不要求登录；请通过可信内网、VPN 或 HTTPS 反向代理访问，不要直接暴露到公网。
 
 ---
 
@@ -29,12 +29,14 @@ CyMediaFlow 用一套可检查、可编辑、可锁定、可恢复的流程，�
 | 排除与 `.ignore` | SP、PV、NCOP/NCED、Fonts 等非正片默认不参与普通剧集处理；手动排除文件夹时可同步创建 `.ignore`。 |
 | 缓存与定时更新 | 缓存作品搜索、分析和刮削结果；只有手动点击才重新联网。每部作品可独立启用每日刷新，完结后自动停止。 |
 | NAS 友好 | 提供 amd64 预构建归档、GHCR 镜像和复用 NAS 已有基础镜像的本地构建流程，内置 FFmpeg/ffprobe。 |
+| 自动追番 | RSS、Mikan/Nyaa/DMHY/自定义搜索、缺集补全、合集映射、qBittorrent/aria2、修订版备份替换与恢复。 |
+| 访问与通知 | 可选账号与权限、Passkey、可撤销 API Token、有限 MCP 工具、订阅日历、SSE 与签名 Webhook。 |
 
 ### 主要功能
 
 #### 1. 媒体库首页
 
-- 以海报墙展示媒体目录下的番剧，左侧仅保留“首页”和“设置”。
+- 以海报墙展示媒体目录下的番剧，左侧为“首页”“AutoBangumi”和“设置”；追番功能放在独立页的子标签内。
 - 支持按添加时间或名称排序，并可按名称搜索筛选。
 - 点击海报后，从右侧打开约占页面三分之二宽度的详情抽屉。
 - 详情页按“作品匹配 → NFO 文件 → 季集映射 → 刮削信息”的顺序组织配置。
@@ -116,6 +118,17 @@ Season 1/poster.jpg
 - 任务沿用该作品已经保存的来源、映射、锁定和写入配置。
 - 当远程条目给出总集数并确认最终集已更新、且满足安全的播出后条件时，自动停止定时刷新。
 - 搜索、NFO 分析和刮削展示都使用持久化缓存；需要重新联网时由用户手动点击搜索、分析或刮削按钮。
+
+#### 9. AutoBangumi 自动追番与访问控制
+
+- 订阅封面墙与新增 RSS 弹窗，按作品设置过滤词、字幕组、语言、季号及集数偏移。
+- 缓存资源搜索结果，显式预览后单次下载或转订阅；PT 接入通过 RSS/Torznab，不是通用网页登录抓取。
+- 按本地文件、任务与 RSS 候选检查缺集；支持同季合集逐文件映射、Movie/OVA/SP，以及同语言同组 V2/V3 的 qB 可恢复替换。
+- 下载状态确认、暂停/继续、保留文件移除、原名恢复、带标签孤儿任务关联；aria2 以同文件系统硬链接发布。
+- 播出周历、站内通知、签名 Webhook、SSE；可选 LLM 只生成需人工确认的解析建议。
+- 设置页可主动启用多用户登录、Passkey、API Token/MCP 与版本检查。版本检查不自动升级容器。
+
+完整操作、代码位置、安全边界和本次升级步骤见 [P1/P2/P3 使用说明](docs/autobangumi-p1-p2-p3.md)。下载整理后仅刷新媒体索引，NFO 与 Emby 刷新仍走既有流程；不要直接对整个现有媒体库启用自动替换。
 
 ### 工作方式
 
@@ -397,7 +410,7 @@ GitHub Actions 会验证 Python 3.10 后端测试并构建 linux/amd64 前后端
 - **重命名是真实文件操作。** 只在用户点击文件夹“重命名”时执行，并提供原名恢复；仍建议先做 NAS 快照。
 - **普通刮削不会重命名视频。** NFO/图片更新和成组重命名是两个独立动作。
 - **写入需要权限。** `MEDIA_MOUNT_MODE=rw`、正确的 PUID/PGID 和共享文件夹 ACL 缺一不可。
-- **不要直接暴露公网。** 当前没有登录系统；请使用可信内网、VPN 或带认证与 HTTPS 的反向代理。
+- **账号登录需主动启用。** 在设置创建首个管理员后 API 才要求认证；使用可信内网/VPN/HTTPS，Passkey 不支持普通 HTTP 局域网 IP。
 - **不要提交机密和运行数据。** `.env`、`access_token.json`、`config.local.json`、SQLite、缓存和构建产物均应保持忽略。
 - **缓存不会自动联网更新。** 搜索、分析与刮削结果会复用缓存；需要最新数据时手动点击相应按钮。
 - **特殊内容默认跳过。** SP/PV/NCOP/NCED/Fonts 等规则可在设置中调整；手动排除目录可写入 `.ignore`。
@@ -442,6 +455,8 @@ docker-compose exec backend ffprobe -version
 - [NAS 预构建镜像部署与更新](docs/nas-prebuilt-deployment.md)
 - [复用 NAS 基础镜像本地构建与更新](docs/nas-local-build-deployment.md)
 - [开发日志](docs/development-log.md)
+- [AutoBangumi 订阅与规则](docs/autobangumi-subscriptions.md)
+- [AutoBangumi P1/P2/P3 功能与升级说明](docs/autobangumi-p1-p2-p3.md)
 
 ---
 
@@ -451,7 +466,7 @@ docker-compose exec backend ffprobe -version
 
 CyMediaFlow is a personal, NAS-first anime library companion. It sits between downloaded media and Emby: it scans folders, binds local titles and episodes to Bangumi/TMDB, previews and writes standard NFO sidecars, saves artwork, aligns subtitles, and handles difficult season/episode mappings without forcing the physical folder layout to mirror a provider.
 
-The project is under active development. It is designed for a trusted home network and currently has no built-in authentication or multi-user authorization.
+The project is under active development and intended for a trusted home network. Authentication is opt-in: create the first administrator in Settings to protect APIs with admin/operator/viewer roles, password or Passkey login, and scoped API tokens. Before setup, the regular APIs remain unauthenticated. Use a trusted LAN, VPN, or HTTPS reverse proxy.
 
 ### Highlights
 
@@ -468,12 +483,14 @@ The project is under active development. It is designed for a trusted home netwo
 | Ignore rules | Skip extras such as SP, PV, NCOP/NCED, menus, and Fonts; manually excluded folders can receive an `.ignore` marker. |
 | Cache and scheduling | Reuse saved search/scrape analysis until manually refreshed, and run a per-title daily refresh that stops after a confirmed finale. |
 | NAS deployment options | GHCR images, downloadable amd64 image archives, or local builds based on cached Python/Node/Nginx images. |
+| AutoBangumi automation | RSS subscriptions, cached resource search, missing-episode backfill, batch mapping, qBittorrent/aria2, and reversible qB revision upgrades. |
+| Access and updates | Optional roles, Passkeys, revocable API tokens, limited MCP tools, subscription calendar, SSE, signed webhooks, and manual version checks. |
 
 ### Feature tour
 
 #### Library and detail UI
 
-- A compact poster shelf with Home and Settings as the only primary navigation entries.
+- A compact poster shelf with Home, AutoBangumi, and Settings navigation; automation features stay in AutoBangumi sub-tabs.
 - Search plus added-time/name sorting.
 - A right-side detail drawer using roughly two thirds of the page.
 - Workflow order: Work matching → NFO files → Season/episode mapping → Scraped metadata.
@@ -725,6 +742,20 @@ npm test -- --run
 npm run build
 npm run test:sites
 ```
+
+### AutoBangumi P1 / P2 / P3
+
+The automation page opens on subscribed-anime posters. Its sub-tabs contain rules, RSS, resource search, release review, managed downloads, a weekly calendar, notifications, and activity history. Advanced controls remain collapsed in the shared rule drawer; automation and security settings are separated from media settings.
+
+- **P1:** Search Mikan/Nyaa/DMHY or custom RSS/Torznab endpoints, keep the last results, preview one-off downloads, or create subscriptions. Check missing episodes against local files and saved releases. Map same-season batches and specials, control downloads, adopt tagged orphan qB tasks, and replace comparable V2/V3 revisions while retaining recoverable originals.
+- **P2:** Cached Bangumi calendar, per-user notification read state, signed generic webhooks with retry receipts, and SSE UI updates. aria2 supports stable task tracking and hardlink publishing; it does not rename its source files or automatically replace revisions.
+- **P3:** Explicit, cached suggestions from a configurable Chat Completions-compatible model; opt-in users/roles, WebAuthn Passkeys, scoped expiring tokens, and a small token-authenticated MCP endpoint. Version checks compare the built commit with GitHub main but never self-update containers.
+
+PT support requires RSS/Torznab rather than arbitrary login-page scraping. Webhooks use a documented generic JSON format, not every platform's native payload. Cross-season batches and ambiguous revision replacements remain manual. Download completion refreshes the library index; existing NFO bindings, locks, and Emby refresh workflows remain separate.
+
+Upgrading requires matching frontend/backend images, the original persistent `/data`, and the new Python WebAuthn dependency. Follow the usual NAS update script (stop this project's old containers first) or prebuilt-image workflow. No Docker daemon restart or database reset is required. Enable authentication yourself after upgrading; configure a stable HTTPS origin before registering Passkeys. Rolling back to an older image without authentication removes API protection, so isolate access before rollback.
+
+See the [detailed feature, safety, code-location and upgrade guide](docs/autobangumi-p1-p2-p3.md) (Chinese). No player or automatic in-container updater is included.
 
 ### Operational notes
 

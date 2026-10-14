@@ -7,6 +7,8 @@ export function emptySubscription(defaultExcludes: string[] = []): SubscriptionD
     exclude_keywords: [...defaultExcludes], enabled: true, archived: false, poster_url: null, year: null,
     source_title: "", source: null, subtitle: null, resolution: null, release_group: null,
     air_weekday: null, provider: null, provider_id: null,
+    content_kind: "series", allow_batch: false, revision_policy: "review", expected_episodes: null,
+    first_episode: 1, downloader: "qbittorrent",
   };
 }
 

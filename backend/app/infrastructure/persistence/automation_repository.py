@@ -284,7 +284,18 @@ class AutomationRepository:
             return list(
                 session.scalars(
                     select(AutomationDownloadRecord)
-                    .where(AutomationDownloadRecord.state.not_in(("organized", "review")))
+                    .where(
+                        AutomationDownloadRecord.state.not_in(
+                            (
+                                "organized",
+                                "review",
+                                "removed",
+                                "superseded",
+                                "downloaded",
+                                "revision_ready",
+                            )
+                        )
+                    )
                     .order_by(AutomationDownloadRecord.id)
                 )
             )
@@ -330,6 +341,28 @@ class AutomationRepository:
                 session.refresh(record)
             return record
 
+    def plan_operations(self, download_id: int, files: list[dict]) -> None:
+        """Commit the whole plan before the first filesystem/downloader mutation."""
+        with self._factory() as session:
+            existing = session.scalar(
+                select(AutomationFileOperationRecord.id)
+                .where(AutomationFileOperationRecord.download_id == download_id)
+                .limit(1)
+            )
+            if existing is not None:
+                raise ValueError("整理计划已存在，请刷新状态")
+            session.add_all(
+                [
+                    AutomationFileOperationRecord(
+                        download_id=download_id,
+                        source_path=row["source"],
+                        target_path=row["target"],
+                    )
+                    for row in files
+                ]
+            )
+            session.commit()
+
     def update_operation(self, operation_id: int, state: str, error: str | None = None) -> None:
         with self._factory() as session:
             record = session.get(AutomationFileOperationRecord, operation_id)
@@ -361,3 +394,21 @@ class AutomationRepository:
                     .limit(limit)
                 )
             )
+
+    def events_after(self, after: int, limit: int = 100) -> list[AutomationEventRecord]:
+        with self._factory() as session:
+            return list(
+                session.scalars(
+                    select(AutomationEventRecord)
+                    .where(AutomationEventRecord.id > after)
+                    .order_by(AutomationEventRecord.id)
+                    .limit(limit)
+                )
+            )
+
+    def update_release_analysis(self, release_id: int, parsed: dict) -> None:
+        with self._factory() as session:
+            record = session.get(AutomationReleaseRecord, release_id)
+            if record:
+                record.parsed = parsed
+                session.commit()

@@ -172,6 +172,46 @@ class AutomationEventRecord(Base):
     )
 
 
+class FeatureDocumentRecord(Base):
+    """Small durable documents: search cache, review plans and delivery receipts."""
+
+    __tablename__ = "feature_documents"
+    key: Mapped[str] = mapped_column(String(180), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AccessCredentialRecord(Base):
+    __tablename__ = "access_credentials"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(String(100))
+    secret_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    scope: Mapped[str] = mapped_column(String(20), default="read")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PasskeyRecord(Base):
+    __tablename__ = "passkeys"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
 def create_session_factory(database_url: str) -> sessionmaker[Session]:
     engine = create_engine(
         database_url,

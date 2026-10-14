@@ -12,14 +12,9 @@ from urllib.parse import urlsplit, urlunsplit
 from app.core.errors import DomainError
 from app.core.path_safety import path_is_within
 from app.domain.automation import (
-    SUBTITLE_SUFFIXES,
-    VIDEO_SUFFIXES,
     analyze_release,
     match_subscription,
     safe_component,
-    safe_relative_path,
-    subtitle_tag,
-    target_stem,
 )
 from app.domain.automation_subscription import (
     effective_season,
@@ -101,6 +96,10 @@ class AutomationService:
         self._rss = HttpRssClient(app_settings.get("automation_rss_proxy_url") or None)
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
+        self._updates_task: asyncio.Task[None] | None = None
+        self.features = None
+        self.operations = None
+        self.background = None
 
     def get_config(self) -> AutomationConfig:
         get = self._settings.get
@@ -163,8 +162,15 @@ class AutomationService:
             if clear_qb_password
             else (qb_password if qb_password is not None else stored_password)
         )
-        if enabled and (
-            not qb_url or not qb_save_root or not qb_username or not effective_password
+        aria_configured = (
+            self.features
+            and self.features.private().get("aria2_url")
+            and self.features.private().get("aria2_save_root")
+        )
+        if (
+            enabled
+            and not aria_configured
+            and (not qb_url or not qb_save_root or not qb_username or not effective_password)
         ):
             raise DomainError(
                 "DOWNLOADER_NOT_CONFIGURED", "启用前请填写 qBittorrent 连接和保存目录"
@@ -209,6 +215,22 @@ class AutomationService:
             raise
         except Exception as exc:
             raise DomainError("DOWNLOADER_UNAVAILABLE", "qBittorrent 连接测试失败", 503) from exc
+
+    def downloader(self, job=None, kind: str | None = None):
+        backend = kind or ((job.naming_json or {}).get("downloader") if job else None)
+        if backend == "aria2":
+            from app.infrastructure.automation.aria2 import Aria2Client
+
+            config = self.features.private() if self.features else {}
+            if not config.get("aria2_url"):
+                raise DomainError("ARIA2_NOT_CONFIGURED", "请先在设置里配置 aria2")
+            return Aria2Client(
+                config["aria2_url"],
+                config.get("aria2_secret", ""),
+                self.get_config().rss_proxy_url or None,
+                stored_gid=job.torrent_hash if job else None,
+            )
+        return self._qb()
 
     def save_feed(self, feed_id: int | None, *, name: str, url: str | None, enabled: bool) -> dict:
         current = self._repo.get_feed(feed_id) if feed_id is not None else None
@@ -348,6 +370,8 @@ class AutomationService:
                     "parsed": analysis.json(),
                 },
             )
+            if release.decision == "excluded":
+                continue
             previous = self._repo.get_download_by_release(release.id)
             if previous and not self._can_retry(previous):
                 pending += not previous.torrent_hash and previous.state in {
@@ -398,10 +422,38 @@ class AutomationService:
             "failed": failed,
         }
 
-    async def _submit(self, release: object, rule: object, config: AutomationConfig) -> bool:
+    async def _submit(
+        self, release: object, rule: object, config: AutomationConfig, approved: bool = False
+    ) -> bool:
         season = effective_season(rule, release.parsed.get("season"))
+        options = subscription_options(rule)
+        episode = release.parsed.get("episode")
+        if episode is None and options["content_kind"] == "movie":
+            episode = 1 - rule.episode_offset
+        previous = None
+        if self.operations:
+            previous, reason = self.operations.revision_candidate(release, rule)
+            if previous and options["downloader"] == "aria2":
+                self._repo.set_release_decision(release.id, "review", "aria2 修订替换需人工处理")
+                return False
+            if previous and (
+                reason
+                or options["revision_policy"] == "keep"
+                or (options["revision_policy"] == "review" and not approved)
+            ):
+                self._repo.set_release_decision(
+                    release.id,
+                    "review" if not reason else "skipped",
+                    reason or "发现更高修订版，请在发布候选确认下载后替换",
+                )
+                return False
         folder = safe_component(rule.folder_name)
-        save_path = f"{config.qb_save_root}/{folder}/Season {season}"
+        root = config.qb_save_root
+        if options["downloader"] == "aria2":
+            root = self.features.private().get("aria2_save_root", "") if self.features else ""
+        if not root:
+            raise DomainError("DOWNLOAD_ROOT_REQUIRED", "请先配置下载器保存根目录")
+        save_path = f"{root}/{folder}/Season {season}"
         local_path = (self._media_root / folder / f"Season {season}").resolve(strict=False)
         if not path_is_within(local_path, self._media_root):
             self._repo.set_release_decision(release.id, "review", "目标目录越界")
@@ -409,12 +461,28 @@ class AutomationService:
         job = self._repo.create_download(
             release.id,
             rule.id,
-            save_path,
+            (
+                f"{root}/.cymediaflow-downloads/{release.id}"
+                if options["downloader"] == "aria2"
+                else save_path
+            ),
             str(local_path),
             {
                 "title": rule.title,
                 "season": season,
-                "episode": int(release.parsed["episode"]) + rule.episode_offset,
+                "episode": int(episode) + rule.episode_offset if episode is not None else None,
+                "episode_offset": rule.episode_offset,
+                "allow_batch": options["allow_batch"],
+                "downloader": options["downloader"],
+                "version": release.parsed.get("version") or 1,
+                "revision_of": previous.id if previous else None,
+                "revision_policy": options["revision_policy"],
+                "manual": approved,
+                "source_local_path": str(
+                    self._media_root / ".cymediaflow-downloads" / str(release.id)
+                )
+                if options["downloader"] == "aria2"
+                else None,
             },
         )
         self._repo.set_release_decision(release.id, "confirming", "正在提交，等待下载器确认")
@@ -424,7 +492,7 @@ class AutomationService:
         sending = False
         acknowledged = False
         try:
-            qb = self._qb()
+            qb = self.downloader(job)
             present = await qb.by_tag(job.qb_tag)
             if not present:
                 self._repo.update_download(job.id, state="confirming", error=None)
@@ -434,12 +502,10 @@ class AutomationService:
                 present = await qb.by_tag(job.qb_tag)
             if present:
                 return self._confirm_job(job, present)
-            self._repo.set_release_decision(
-                job.release_id, "confirming", "等待 qBittorrent 创建任务"
-            )
+            self._repo.set_release_decision(job.release_id, "confirming", "等待下载器创建任务")
             self._repo.add_event(
                 "download_pending",
-                f"任务 #{job.id} 请求已发送，等待 qBittorrent 确认",
+                f"任务 #{job.id} 请求已发送，等待下载器确认",
                 download_id=job.id,
             )
             return False
@@ -464,7 +530,7 @@ class AutomationService:
         self._repo.set_release_decision(job.release_id, "queued", None)
         if not job.torrent_hash:
             self._repo.add_event(
-                "download_added", f"已在 qBittorrent 确认创建任务 #{job.id}", download_id=job.id
+                "download_added", f"已在下载器确认创建任务 #{job.id}", download_id=job.id
             )
         return True
 
@@ -500,6 +566,13 @@ class AutomationService:
                 raise DomainError(
                     "DOWNLOAD_NOT_RETRYABLE", "任务仍在确认中或已在下载器创建，请先同步状态", 409
                 )
+            if job.naming_json.get("manual"):
+                release = self._repo.get_release(job.release_id)
+                if release is None:
+                    raise DomainError("RELEASE_NOT_FOUND", "发布记录不存在", 404)
+                confirmed = await self._send_job(job, release.download_url)
+                current = self._repo.get_download(job.id)
+                return {"confirmed": confirmed, "state": current.state, "error": current.error}
             if not self.get_config().enabled:
                 raise DomainError("AUTOMATION_DISABLED", "请先在设置中启用自动追番")
             release = self._repo.get_release(job.release_id)
@@ -560,16 +633,16 @@ class AutomationService:
                 await self._send_job(job, release.download_url)
                 continue
             try:
-                qb = self._qb()
+                qb = self.downloader(job)
                 matches = await qb.by_tag(job.qb_tag)
                 if not matches:
                     if job.state not in {"missing", "retry", "planned"} and (
                         job.torrent_hash or self._can_retry(job)
                     ):
                         message = (
-                            "曾创建的任务已不在 qBittorrent 中，保留下载记录，请人工核对"
+                            "曾创建的任务已不在下载器中，保留下载记录，请人工核对"
                             if job.torrent_hash
-                            else "qBittorrent 未创建任务；请检查种子来源及 RSS 代理后重试"
+                            else "下载器未创建任务；请检查种子来源及 RSS 代理后重试"
                         )
                         self._repo.update_download(job.id, state="missing", error=message)
                         self._repo.set_release_decision(job.release_id, "missing", message)
@@ -578,10 +651,20 @@ class AutomationService:
                     self._review(job, "下载器标签对应多个任务")
                     continue
                 torrent = matches[0]
+                if torrent.get("state") in {"pausedDL", "stoppedDL", "paused"}:
+                    self._repo.update_download(job.id, state="paused")
+                    continue
+                if torrent.get("state") in {"error", "missingFiles"}:
+                    self._review(job, "下载器报告文件或下载错误，请检查下载器")
+                    continue
                 torrent_hash = str(torrent.get("hash") or "")
                 if not torrent_hash:
                     continue
-                if job.torrent_hash and job.torrent_hash != torrent_hash:
+                aria_transition = (
+                    job.naming_json.get("downloader") == "aria2"
+                    and torrent.get("parent_hash") == job.torrent_hash
+                )
+                if job.torrent_hash and job.torrent_hash != torrent_hash and not aria_transition:
                     self._review(job, "下载器任务哈希已变化，请人工核对")
                     continue
                 if not job.torrent_hash:
@@ -595,11 +678,17 @@ class AutomationService:
                         progress=progress,
                         error=None,
                     )
+                    if job.progress != progress or job.state != "downloading":
+                        self._repo.add_event(
+                            "download_progress",
+                            f"任务 #{job.id}：下载 {progress}%",
+                            download_id=job.id,
+                        )
                     continue
                 self._repo.update_download(
                     job.id, torrent_hash=torrent_hash, state="organizing", progress=100
                 )
-                await self._organize(job, torrent_hash, qb)
+                await self._organize(self._repo.get_download(job.id), torrent_hash, qb)
             except Exception as exc:
                 logger.warning("Downloader sync failed for job %s: %s", job.id, type(exc).__name__)
                 self._repo.update_download(job.id, state="retry_sync", error="下载器状态同步失败")
@@ -610,114 +699,59 @@ class AutomationService:
         self._repo.add_event("review", f"任务 #{job.id}：{reason}", download_id=job.id)
 
     async def _organize(self, job: object, torrent_hash: str, qb: QbittorrentClient) -> None:
-        files = await qb.files(torrent_hash)
-        videos = [
-            file
-            for file in files
-            if Path(str(file.get("name", ""))).suffix.casefold() in VIDEO_SUFFIXES
-        ]
-        if len(videos) != 1:
-            self._review(job, "需要恰好一个视频文件；合集或多视频请人工处理")
-            return
-        rule = self._repo.get_subscription(job.subscription_id)
-        release = self._repo.get_release(job.release_id)
-        if rule is None or release is None:
-            self._review(job, "追番规则或发布记录已丢失")
-            return
-        try:
-            video_path = safe_relative_path(str(videos[0]["name"]))
-            local_dir = Path(job.local_path).resolve(strict=False)
-            if not path_is_within(local_dir, self._media_root):
-                raise ValueError("本地下载目录越界")
-            if len(video_path.parts) != 1:
-                raise ValueError("多层种子文件目录需要人工整理")
-            # New rule edits affect future downloads, never an already queued task's target.
-            naming = job.naming_json or {}
-            episode = int(
-                naming.get("episode", int(release.parsed["episode"]) + rule.episode_offset)
-            )
-            season = int(naming.get("season", effective_season(rule, release.parsed.get("season"))))
-            if episode < 0:
-                raise ValueError("调整后的集号无效")
-            stem = target_stem(naming.get("title", rule.title), season, episode)
-            media_files = [
-                file
-                for file in files
-                if Path(str(file.get("name", ""))).suffix.casefold()
-                in VIDEO_SUFFIXES | SUBTITLE_SUFFIXES
-            ]
-            planned: list[tuple[str, str]] = []
-            for file in media_files:
-                original = safe_relative_path(str(file["name"]))
-                if len(original.parts) != 1:
-                    raise ValueError("字幕与视频不在同一层目录")
-                suffix = original.suffix.casefold()
-                tag = subtitle_tag(original.name) if suffix in SUBTITLE_SUFFIXES else ""
-                planned.append((original.as_posix(), stem + tag + suffix))
-            targets = [target.casefold() for _, target in planned]
-            if len(targets) != len(set(targets)):
-                raise ValueError("多个文件将生成相同目标名称")
-            occupied = {str(file.get("name", "")).casefold() for file in files}
-            for source, target in planned:
-                target_path = (local_dir / target).resolve(strict=False)
-                if not path_is_within(target_path, self._media_root):
-                    raise ValueError("目标文件越界")
-                if target.casefold() != source.casefold() and (
-                    target.casefold() in occupied or target_path.exists()
-                ):
-                    raise ValueError("目标文件已存在")
-        except (KeyError, TypeError, ValueError) as exc:
-            self._review(job, str(exc))
-            return
-        operations = self._repo.list_operations(job.id)
-        if not operations:
-            for source, target in planned:
-                self._repo.plan_operation(job.id, source, target)
-            operations = self._repo.list_operations(job.id)
-        for operation in operations:
-            actual = {str(file.get("name", "")) for file in await qb.files(torrent_hash)}
-            if operation.target_path in actual and operation.source_path not in actual:
-                self._repo.update_operation(operation.id, "done")
-                continue
-            if operation.source_path == operation.target_path:
-                self._repo.update_operation(operation.id, "done")
-                continue
-            if operation.source_path not in actual or operation.target_path in actual:
-                self._review(job, "下载器文件状态与重命名计划冲突")
+        if self.operations is None:
+            from app.application.automation_operations import AutomationOperations
+            from app.infrastructure.persistence.feature_repository import FeatureRepository
+
+            self.operations = AutomationOperations(self, FeatureRepository(self._repo._factory))
+        if not job.naming_json or "title" not in job.naming_json:
+            rule = self._repo.get_subscription(job.subscription_id)
+            release = self._repo.get_release(job.release_id)
+            if not rule or not release:
+                self._review(job, "追番规则或发布记录已丢失")
                 return
-            self._repo.update_operation(operation.id, "running")
-            await qb.rename_file(torrent_hash, operation.source_path, operation.target_path)
-            actual = {str(file.get("name", "")) for file in await qb.files(torrent_hash)}
-            if operation.target_path not in actual:
-                self._repo.update_download(job.id, state="retry_sync", error="等待下载器确认重命名")
-                return
-            self._repo.update_operation(operation.id, "done")
-        if not all(
-            (Path(job.local_path) / operation.target_path).is_file() for operation in operations
-        ):
             self._repo.update_download(
-                job.id, state="waiting_files", error="等待媒体目录出现下载文件"
+                job.id,
+                naming_json={
+                    "title": rule.title,
+                    "season": effective_season(rule, release.parsed.get("season")),
+                    "episode": int(release.parsed["episode"]) + rule.episode_offset,
+                },
             )
-            return
-        self._repo.update_download(job.id, state="organized", error=None)
-        await asyncio.to_thread(self._catalog.list_media)
-        self._repo.add_event(
-            "organized", f"任务 #{job.id} 已整理并刷新媒体列表", download_id=job.id
-        )
+            job = self._repo.get_download(job.id)
+        await self.operations.auto_organize(job, qb)
 
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop(), name="cymediaflow-automation")
+        if self.background and self._updates_task is None:
+            self._updates_task = asyncio.create_task(
+                self._updates_loop(), name="cymediaflow-automation-updates"
+            )
 
     async def stop(self) -> None:
+        if self._updates_task is not None:
+            self._updates_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._updates_task
+            self._updates_task = None
         if self._task is not None:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
 
+    async def _updates_loop(self) -> None:
+        # Slow webhook or calendar endpoints must not delay downloader reconciliation.
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await self.background.tick()
+            except Exception:
+                logger.warning("Automation background update failed")
+
     async def _loop(self) -> None:
-        if self.get_config().enabled:
+        if self._repo.list_pending_downloads():
             try:
                 await self.sync_downloads()
             except Exception:
@@ -726,6 +760,11 @@ class AutomationService:
         while True:
             await asyncio.sleep(30)
             config = self.get_config()
+            if self._repo.list_pending_downloads() and not self._lock.locked():
+                try:
+                    await self.sync_downloads()
+                except Exception:
+                    logger.warning("Download progress synchronization failed")
             if not config.enabled:
                 elapsed = 0
                 continue

@@ -42,7 +42,12 @@ def update_bangumi_proxy(
 
 
 @router.put("/settings")
-def update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]:
+async def update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]:
+    async with request.app.state.settings_update_lock:
+        return await _update_settings(body, request)
+
+
+async def _update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]:
     container = get_container(request)
     media_root = _validated_media_root(body.media_root, container.settings.allowed_media_roots)
     values = {
@@ -56,9 +61,7 @@ def update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]
             str(body.tmdb_proxy_url) if body.tmdb_proxy_enabled and body.tmdb_proxy_url else ""
         ),
         "operation_mode": body.operation_mode,
-        "episode_artwork_fallback_enabled": str(
-            body.episode_artwork_fallback_enabled
-        ).casefold(),
+        "episode_artwork_fallback_enabled": str(body.episode_artwork_fallback_enabled).casefold(),
         "episode_artwork_capture_percent": str(body.episode_artwork_capture_percent),
     }
     if body.ignore_marker_enabled is not None:
@@ -82,7 +85,19 @@ def update_settings(body: SettingsUpdate, request: Request) -> dict[str, object]
     for key, value in values.items():
         container.app_settings.set(key, value)
 
-    request.app.state.container = build_container(container.settings)
+    from starlette.concurrency import run_in_threadpool
+
+    await container.automation_service.stop()
+    await container.scheduled_refresh_service.stop()
+    try:
+        replacement = await run_in_threadpool(build_container, container.settings)
+    except Exception:
+        await container.automation_service.start()
+        await container.scheduled_refresh_service.start()
+        raise
+    request.app.state.container = replacement
+    await replacement.automation_service.start()
+    await replacement.scheduled_refresh_service.start()
     return ok(request, _settings_view(request.app.state.container).model_dump(mode="json"))
 
 
@@ -128,15 +143,14 @@ def _validated_media_root(value: str, allowed_root: Path | tuple[Path, ...]) -> 
     allowed_roots = allowed_root if isinstance(allowed_root, tuple) else (allowed_root,)
     allowed = tuple(root.resolve(strict=False) for root in allowed_roots)
     relative_base = allowed[0]
-    candidate = (
-        requested if requested.is_absolute() else relative_base / requested
-    ).resolve(strict=False)
+    candidate = (requested if requested.is_absolute() else relative_base / requested).resolve(
+        strict=False
+    )
     if not any(path_is_within(candidate, root) for root in allowed):
         raise DomainError(
             code="MEDIA_ROOT_OUTSIDE_ALLOWED_ROOT",
             message=(
-                "媒体目录必须位于允许范围内；Docker/NAS 请填写容器路径，"
-                "通常为 /media 或其子目录"
+                "媒体目录必须位于允许范围内；Docker/NAS 请填写容器路径，通常为 /media 或其子目录"
             ),
             status_code=400,
             details={

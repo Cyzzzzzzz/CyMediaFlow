@@ -5,6 +5,9 @@ export class ApiError extends Error {
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
   const payload = (await response.json()) as ApiEnvelope<T> & { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
-  if (!response.ok) throw new ApiError(payload.error?.message ?? "请求失败", response.status, payload.error?.code, payload.error?.details);
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/api/v1/auth/")) window.dispatchEvent(new Event("cymf-auth-expired"));
+    throw new ApiError(payload.error?.message ?? "请求失败", response.status, payload.error?.code, payload.error?.details);
+  }
   return payload.data;
 }

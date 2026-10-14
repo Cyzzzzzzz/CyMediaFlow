@@ -3,24 +3,32 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { automationApi } from "./api";
-import type { Feed, Subscription } from "./types";
+import type { Feed, Release, Subscription } from "./types";
+import { CalendarPanel, NotificationsPanel, useAutomationEvents } from "./CalendarNotifications";
+import { DownloadActions, OrphanTasks } from "./DownloadActions";
+import { ReleaseReviewDialog, ResourceSearchPanel } from "./ResourceSearchPanel";
+import { featureApi } from "./featureApi";
 import { AddRssDialog } from "./AddRssDialog";
 import { SubscriptionEditor } from "./SubscriptionEditor";
 import { sameWork, SubscriptionShelf } from "./SubscriptionShelf";
 import "./automation.css";
 import "./subscriptions.css";
 
-type Tab = "shelf" | "rules" | "rss" | "releases" | "downloads" | "events";
+type Tab = "shelf" | "rules" | "rss" | "releases" | "downloads" | "events" | "search" | "calendar" | "notifications";
 const tabItems: { id: Tab; label: string; icon: typeof Rss }[] = [
   { id: "shelf", label: "订阅番剧", icon: SquaresFour },
   { id: "rules", label: "追番规则", icon: Television },
   { id: "rss", label: "RSS", icon: Rss },
+  { id: "search", label: "资源搜索", icon: ListBullets },
   { id: "releases", label: "发布候选", icon: ListBullets },
   { id: "downloads", label: "下载任务", icon: DownloadSimple },
+  { id: "calendar", label: "播出日历", icon: SquaresFour },
+  { id: "notifications", label: "通知", icon: ListBullets },
   { id: "events", label: "活动记录", icon: ListBullets },
 ];
 
 export function AutomationPage() {
+  useAutomationEvents();
   const [tab, setTab] = useState<Tab>("shelf");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Subscription | "new" | null>(null);
@@ -34,7 +42,7 @@ export function AutomationPage() {
       {tabItems.map(({ id, label, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}><Icon size={17} />{label}</button>)}
     </div>
     {message ? <div className="subscription-notice" role="status"><span>{message}</span><button type="button" className="quiet-button" onClick={() => setMessage("")}>关闭</button></div> : null}
-    {tab === "shelf" ? <SubscriptionShelf rules={rules.data ?? []} loading={rules.isLoading} error={rules.error} onEdit={setEditing} onAdd={() => setAdding(true)} /> : tab === "rules" ? <RulesPanel rules={rules.data ?? []} feeds={feeds.data ?? []} onEdit={setEditing} onAdd={() => setEditing("new")} /> : tab === "rss" ? <RssPanel /> : tab === "releases" ? <ReleasesPanel /> : tab === "downloads" ? <DownloadsPanel ruleId={downloadRule} onClear={() => setDownloadRule(null)} /> : <EventsPanel />}
+    {tab === "shelf" ? <SubscriptionShelf rules={rules.data ?? []} loading={rules.isLoading} error={rules.error} onEdit={setEditing} onAdd={() => setAdding(true)} /> : tab === "rules" ? <RulesPanel rules={rules.data ?? []} feeds={feeds.data ?? []} onEdit={setEditing} onAdd={() => setEditing("new")} /> : tab === "rss" ? <RssPanel /> : tab === "releases" ? <ReleasesPanel /> : tab === "downloads" ? <DownloadsPanel ruleId={downloadRule} onClear={() => setDownloadRule(null)} /> : tab === "search" ? <ResourceSearchPanel /> : tab === "calendar" ? <CalendarPanel onEdit={setEditing} /> : tab === "notifications" ? <NotificationsPanel /> : <EventsPanel />}
     {adding ? <AddRssDialog onClose={() => setAdding(false)} onSuccess={(text) => { setMessage(text); setAdding(false); setTab("shelf"); }} /> : null}
     {editing !== null ? <SubscriptionEditor key={editing === "new" ? "new" : editing.id} rule={editing === "new" ? null : editing} feeds={feeds.data ?? []} siblings={editing === "new" ? [] : (rules.data ?? []).filter((item) => sameWork(item, editing))} onSelect={setEditing} onClose={() => setEditing(null)} onDownloads={(id) => { setEditing(null); setDownloadRule(id); setTab("downloads"); }} /> : null}
   </div>;
@@ -93,21 +101,27 @@ function DownloadsPanel({ ruleId, onClear }: { ruleId: number | null; onClear: (
     {ruleId !== null ? <p className="automation-note">只显示规则 #{ruleId} 的任务 <button type="button" className="quiet-button" onClick={onClear}>查看全部</button></p> : null}
     {sync.isError ? <p role="alert" className="automation-note error">{sync.error.message}</p> : null}
     {retry.isError ? <p role="alert" className="automation-note error">{retry.error.message}</p> : null}
-    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "submitted" && !job.torrent_hash ? "等待确认" : downloadLabels[job.state] ?? job.state}</span>{!job.torrent_hash && ["retry", "missing"].includes(job.state) ? <button type="button" className="secondary-button" disabled={sync.isPending || retry.isPending} onClick={() => retry.mutate(job.id)}>{retry.isPending && retry.variables === job.id ? "重试中…" : "重试添加"}</button> : null}</article>)}</div>
+    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "submitted" && !job.torrent_hash ? "等待确认" : downloadLabels[job.state] ?? job.state}</span>{!job.torrent_hash && ["retry", "missing"].includes(job.state) ? <button type="button" className="secondary-button" disabled={sync.isPending || retry.isPending} onClick={() => retry.mutate(job.id)}>{retry.isPending && retry.variables === job.id ? "重试中…" : "重试添加"}</button> : null}<DownloadActions job={job} /></article>)}</div>
+    <OrphanTasks />
     {!downloads.data?.some((job) => ruleId === null || job.subscription_id === ruleId) ? <div className="page-state">还没有自动下载任务。</div> : null}
   </section>;
 }
 
 const downloadLabels: Record<string, string> = {
+  paused: "已暂停", checking: "校验中", removed: "已移除", superseded: "旧版已备份", revision_ready: "新版待替换",
   planned: "待提交", confirming: "等待确认", submitted: "已确认创建", retry: "添加失败",
   missing: "未找到任务", retry_sync: "同步失败", waiting_files: "等待文件", organizing: "整理中", organized: "已整理", review: "待审核",
 };
 const decisionLabels: Record<string, string> = {
+  excluded: "手动排除",
   new: "待分析", ready: "已匹配", skipped: "已跳过", review: "待审核", queued: "已确认创建",
   confirming: "等待确认", retry: "添加失败", missing: "未找到任务",
 };
 
 function ReleasesPanel() {
+  const client = useQueryClient();
+  const [review, setReview] = useState<Release | null>(null);
+  const skip = useMutation({ mutationFn: featureApi.skip, onSuccess: () => client.invalidateQueries({ queryKey: ["automation", "releases"] }) });
   const releases = useQuery({ queryKey: ["automation", "releases"], queryFn: automationApi.releases });
   const feeds = useQuery({ queryKey: ["automation", "feeds"], queryFn: automationApi.feeds });
   const [feedId, setFeedId] = useState(0);
@@ -117,8 +131,11 @@ function ReleasesPanel() {
     <div className="automation-card-list">{visible?.map((release) => <article className="automation-card" key={release.id}>
       <div><strong>{release.title}</strong><span>{feeds.data?.find((feed) => feed.id === release.feed_id)?.name ?? "未知 RSS"} · {release.analysis.title ?? "标题未识别"} · {release.analysis.episode !== null ? `E${release.analysis.episode}` : "集号未识别"} · 可信度 {release.analysis.confidence}%</span>{release.reason ? <small className="automation-note">{release.reason}</small> : null}</div>
       <span className={`automation-pill ${release.decision === "queued" ? "ok" : ""}`}>{decisionLabels[release.decision] ?? release.decision}</span>
+      <button className="secondary-button" onClick={() => setReview(release)}>审核 / 下载</button><button className="quiet-button" disabled={skip.isPending} onClick={() => skip.mutate(release.id)}>排除</button>
     </article>)}</div>
     {releases.isLoading ? <div className="page-state">正在读取发布候选…</div> : !visible?.length ? <div className="page-state">还没有发布候选。请先刷新 RSS。</div> : null}
+    {review ? <ReleaseReviewDialog release={review} onClose={() => setReview(null)} /> : null}
+    {skip.error ? <p role="alert">{skip.error.message}</p> : null}
   </section>;
 }
 

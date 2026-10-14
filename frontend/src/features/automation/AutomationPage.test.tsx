@@ -29,7 +29,7 @@ describe("AutomationPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><AutomationPage /></QueryClientProvider>);
 
-    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    expect(screen.getAllByRole("tab")).toHaveLength(9);
     fireEvent.click(screen.getByRole("tab", { name: "发布候选" }));
     expect(await screen.findByText("[ANi] Hero 01")).toBeTruthy();
     expect(screen.getByText("字幕组与偏好不符")).toBeTruthy();

@@ -73,6 +73,8 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           platforms: linux/amd64
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
           tags: |
             ${{ matrix.image }}:main
             ${{ matrix.image }}:sha-${{ github.sha }}

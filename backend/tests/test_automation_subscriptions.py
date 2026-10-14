@@ -242,7 +242,11 @@ def test_rule_edit_roundtrip_archive_language_and_offsets(tmp_path: Path) -> Non
         assert client.post(refresh_url).json()["data"]["submitted"] == 1
         assert downloader.add.call_args.args[1] == "/downloads/Hero/Season 2"
         job = repo.list_downloads()[0]
-        assert job.naming_json == {"title": "Hero", "season": 2, "episode": 1}
+        assert {k: job.naming_json[k] for k in ("title", "season", "episode")} == {
+            "title": "Hero",
+            "season": 2,
+            "episode": 1,
+        }
 
 
 def test_download_uses_submission_snapshot_after_rule_is_edited(tmp_path: Path) -> None:
