@@ -64,7 +64,7 @@ class AutomationSubscriptionService:
                 not analysis.title
                 or analysis.episode is None
                 or analysis.confidence < 45
-                or "MULTI_EPISODE_RELEASE" in analysis.warnings
+                or {"INVALID_EPISODE_RANGE", "CROSS_SEASON_RELEASE"}.intersection(analysis.warnings)
             ):
                 unrecognized += 1
                 continue
@@ -97,6 +97,7 @@ class AutomationSubscriptionService:
                         "resolution": analysis.resolution,
                         "subtitle": analysis.subtitle,
                         "release_group": analysis.group,
+                        "allow_batch": False,
                     },
                     "entry_count": 0,
                     "examples": [],
@@ -104,8 +105,20 @@ class AutomationSubscriptionService:
                     "warning": None,
                     "versions": [],
                     "subtitle_variants": [],
+                    "batch_count": 0,
+                    "episode_ranges": [],
                 }
             group = grouped[key]
+            if "MULTI_EPISODE_RELEASE" in analysis.warnings:
+                group["rule"]["allow_batch"] = True
+                group["batch_count"] += 1
+                episode_range = {
+                    "season": analysis.season,
+                    "start": analysis.episode,
+                    "end": analysis.episode_end,
+                }
+                if episode_range not in group["episode_ranges"]:
+                    group["episode_ranges"].append(episode_range)
             group["versions"] = sorted(set([*group["versions"], analysis.version or 1]))
             if analysis.subtitle not in group["subtitle_variants"]:
                 group["subtitle_variants"].append(analysis.subtitle)

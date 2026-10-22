@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.automation import normalized_title
+from app.domain.automation_states import LEGACY_RENAME_PENDING_REASON
 from app.infrastructure.persistence.database import (
     AutomationDownloadRecord,
     AutomationEventRecord,
@@ -280,20 +281,54 @@ class AutomationRepository:
             )
 
     def list_pending_downloads(self) -> list[AutomationDownloadRecord]:
+        # Only this precise legacy error is recoverable without human approval.
+        # A persisted plan is required; restored names must never be changed back.
+        legacy_rename = and_(
+            AutomationDownloadRecord.state == "review",
+            AutomationDownloadRecord.error == LEGACY_RENAME_PENDING_REASON,
+            AutomationDownloadRecord.torrent_hash.is_not(None),
+            AutomationDownloadRecord.progress == 100,
+            select(AutomationFileOperationRecord.id)
+            .where(
+                AutomationFileOperationRecord.download_id == AutomationDownloadRecord.id,
+                AutomationFileOperationRecord.state.in_(("running", "done")),
+            )
+            .exists(),
+            ~select(AutomationFileOperationRecord.id)
+            .where(
+                AutomationFileOperationRecord.download_id == AutomationDownloadRecord.id,
+                AutomationFileOperationRecord.state == "restored",
+            )
+            .exists(),
+        )
+        stale_completed_release = and_(
+            AutomationDownloadRecord.state.in_(("organized", "revision_ready")),
+            select(AutomationReleaseRecord.id)
+            .where(
+                AutomationReleaseRecord.id == AutomationDownloadRecord.release_id,
+                AutomationReleaseRecord.decision == "review",
+                AutomationReleaseRecord.reason == LEGACY_RENAME_PENDING_REASON,
+            )
+            .exists(),
+        )
         with self._factory() as session:
             return list(
                 session.scalars(
                     select(AutomationDownloadRecord)
                     .where(
-                        AutomationDownloadRecord.state.not_in(
-                            (
-                                "organized",
-                                "review",
-                                "removed",
-                                "superseded",
-                                "downloaded",
-                                "revision_ready",
-                            )
+                        or_(
+                            AutomationDownloadRecord.state.not_in(
+                                (
+                                    "organized",
+                                    "review",
+                                    "removed",
+                                    "superseded",
+                                    "downloaded",
+                                    "revision_ready",
+                                )
+                            ),
+                            legacy_rename,
+                            stale_completed_release,
                         )
                     )
                     .order_by(AutomationDownloadRecord.id)
@@ -308,6 +343,20 @@ class AutomationRepository:
             for key, value in values.items():
                 setattr(record, key, value)
             record.updated_at = utc_now()
+            session.commit()
+
+    def set_download_outcome(
+        self, download_id: int, state: str, decision: str, reason: str | None = None
+    ) -> None:
+        """Commit task and candidate together, without undoing an explicit exclusion."""
+        with self._factory() as session:
+            job = session.get(AutomationDownloadRecord, download_id)
+            if job is None:
+                return
+            job.state, job.error, job.updated_at = state, reason, utc_now()
+            release = session.get(AutomationReleaseRecord, job.release_id)
+            if release is not None and release.decision != "excluded":
+                release.decision, release.reason = decision, reason
             session.commit()
 
     def list_operations(self, download_id: int) -> list[AutomationFileOperationRecord]:

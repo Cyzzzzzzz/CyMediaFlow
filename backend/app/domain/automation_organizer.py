@@ -33,23 +33,40 @@ def organize_plan(
     videos = [f for f in media_files if PurePosixPath(f["name"]).suffix.lower() in VIDEO_SUFFIXES]
     if not videos:
         raise ValueError("任务中没有视频文件")
+    parsed_videos = {
+        file["name"]: analyze_release(PurePosixPath(file["name"]).name) for file in videos
+    }
+    unmapped_seasons = {
+        parsed.season
+        for name, parsed in parsed_videos.items()
+        if name not in selected and parsed.season is not None
+    }
+    if len(unmapped_seasons) > 1:
+        raise ValueError("文件包含多个季度，请手动核对文件映射，不能自动合并到同一季")
+    file_based = len(videos) > 1 or naming.get("is_batch", False)
     stems = {}
     result = []
     for file in videos:
         path = safe_relative_path(file["name"])
         mapped = selected.get(path.as_posix())
-        parsed = analyze_release(path.name)
+        parsed = parsed_videos[file["name"]]
+        if not mapped and {
+            "MULTI_EPISODE_RELEASE",
+            "INVALID_EPISODE_RANGE",
+            "CROSS_SEASON_RELEASE",
+        }.intersection(parsed.warnings):
+            raise ValueError(f"单个视频包含多集或无效范围，请手动映射：{path.name}")
         season = mapped["season"] if mapped else naming["season"]
         episode = (
             mapped["episode"]
             if mapped
             else naming.get("episode")
-            if len(videos) == 1
+            if not file_based
             else parsed.episode
         )
         if episode is None:
             raise ValueError(f"缺少集号，请手动映射：{path.name}")
-        if len(videos) > 1 and not mapped:
+        if file_based and not mapped:
             episode += int(naming.get("episode_offset", 0))
         if not 0 <= episode <= 999:
             raise ValueError("映射后的集号超出范围")

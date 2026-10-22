@@ -167,6 +167,25 @@ RSS 标题按文本处理，不再把其中的 `/` 当成文件路径分隔符�
 - 事务与升级：[automation_repository.py](../backend/app/infrastructure/persistence/automation_repository.py)、[database.py](../backend/app/infrastructure/persistence/database.py)
 - 图片缓存：[artwork.py](../backend/app/infrastructure/automation/artwork.py)
 
+### 6.4 合集 RSS 的解析与订阅（2026-10-22）
+
+新增 RSS 入口现在同时支持单集，以及 `S02E01~10`、`S02E01-E10`、`[01-12]` 等明确同季范围的合集。此前标题解析器已能识别多集，但订阅草稿入口统一过滤了 `MULTI_EPISODE_RELEASE`，导致只含合集的源显示“没有识别到可订阅的单集发布”。
+
+只读检查用户提供的 [Mikan RSS](https://mikanani.me/RSS/Bangumi?bangumiId=4120&subgroupid=202)，其中一条“电驭叛客：边缘行者 2…Cyberpunk Edgerunners S02E01~10 1080p 日英双语-多国字幕”可生成 1 条第 2 季规则，合集范围为 E01–E10；这仅代表发布标题中的范围，不据此确认作品身份、放送情况或季度总集数。
+
+使用方式：
+
+1. 进入 **AutoBangumi → 新增 RSS 订阅**，粘贴地址，点击“解析 RSS”。解析只生成草稿，不保存源或提交下载。
+2. 预览会显示合集条数与来源范围，并为本次草稿预填“允许合集”。在“高级设置”可以关闭；确认前核对作品名称、目标季度和偏移。元数据匹配不可用时仍可编辑草稿；可改用“仅解析发布标题”，之后再手动匹配。
+3. 点击“确认订阅”后才保存。只有全局自动追番、RSS 和规则均启用，且命中规则时，后续检查才会提交下载。关闭“允许合集”后，合集不自动下载；手动下载入口也会要求先开启该选项。
+4. 合集作为一个下载任务保存，但不把整包绑定为第 1 集。下载完成后按每个视频的实际集号应用偏移、生成标准文件名；即使整包实际只有一个可处理视频，也使用该文件的编号。标题范围不会自动写成“预计总集数”。
+
+同作品、季度、字幕组和清晰度的单集与合集合并到同一草稿，显示其中的合集数量；不会自动修改已保存规则的合集开关。再次显式刷新 RSS 会更新尚未提交发布的解析缓存，已有下载任务仍保留提交时的命名快照。
+
+跨季、倒序或超出允许范围的合集不会自动生成订阅草稿。实际文件跨季、集号缺失、单个视频标记为多集或目标重名时，整理停在待审核，不自动覆盖或把一段多集视频拆成多个文件。可核对后使用文件映射处理；发布范围明确并不保证种子中的文件清单也可自动整理。
+
+实现：[订阅分析](../backend/app/application/automation_subscription_service.py)、[发布解析](../backend/app/domain/automation.py)、[逐文件整理](../backend/app/domain/automation_organizer.py)、[合集回归测试](../backend/tests/test_automation_batch_rss.py)。部署需同时升级前后端；没有新依赖或数据库结构迁移。此前未能保存的这条 RSS，在部署修复后重新解析即可。
+
 ## 7. 与 AutoBangumi 的差异及部署注意
 
 封面订阅入口和共享规则流程之后，已继续完成 [P1/P2/P3 扩展](autobangumi-p1-p2-p3.md)，但不代表 AutoBangumi 全部功能等价迁入：

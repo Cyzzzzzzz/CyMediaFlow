@@ -74,6 +74,15 @@ export function DownloadActions({ job }: { job: Download }) {
             </button>
           </>
         ) : null}
+        {job.state === "waiting_rename" ? (
+          <button
+            className="quiet-button"
+            disabled={action.isPending}
+            onClick={() => action.mutate({ action: "organize" })}
+          >
+            {action.isPending ? "确认中…" : "重新确认"}
+          </button>
+        ) : null}
         {job.progress === 100 &&
         ["review", "retry_sync", "waiting_files", "organized"].includes(
           job.state,
@@ -98,7 +107,7 @@ export function DownloadActions({ job }: { job: Download }) {
             ) : null}
           </>
         ) : null}
-        {job.naming?.revision_of ? (
+        {job.naming?.revision_of && job.state !== "waiting_rename" ? (
           <>
             <button
               className="quiet-button"

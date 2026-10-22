@@ -327,7 +327,12 @@ class FilenameParser:
         if not segments:
             return None
         candidate = segments[0].strip()
-        if not candidate or candidate.isdigit() or BRACKET_EPISODE.fullmatch(f"[{candidate}]"):
+        if (
+            not candidate
+            or candidate.isdigit()
+            or BRACKET_EPISODE.fullmatch(f"[{candidate}]")
+            or BRACKET_RANGE.fullmatch(f"[{candidate}]")
+        ):
             return None
         if any(
             pattern.fullmatch(candidate)

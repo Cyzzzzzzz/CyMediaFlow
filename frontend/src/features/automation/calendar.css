@@ -1,0 +1,89 @@
+.automation-calendar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px 16px;
+}
+
+.automation-calendar > section {
+  min-width: 0;
+}
+
+.automation-calendar h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.calendar-anime {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 5px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.calendar-anime:hover {
+  background: #f7f4fb;
+}
+
+.calendar-anime:focus-visible {
+  outline: 2px solid #b59ae6;
+  outline-offset: 2px;
+}
+
+.calendar-anime .subscription-poster {
+  width: 48px;
+  height: 72px;
+  border-radius: 8px;
+}
+
+.calendar-anime-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.calendar-anime .subscription-poster-placeholder {
+  padding: 0;
+}
+
+.calendar-anime .subscription-poster-placeholder svg {
+  width: 24px;
+  height: 24px;
+}
+
+.calendar-anime .subscription-poster-placeholder span {
+  display: none;
+}
+
+@media (min-width: 1800px) {
+  .automation-calendar {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1000px) {
+  .automation-calendar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .automation-calendar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}

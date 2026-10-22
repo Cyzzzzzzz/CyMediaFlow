@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.errors import DomainError
@@ -13,6 +14,11 @@ from app.domain.automation import (
     safe_relative_path,
 )
 from app.domain.automation_organizer import organize_plan
+from app.domain.automation_states import (
+    RENAME_CONFIRMATION_TIMEOUT_SECONDS,
+    RENAME_PENDING_REASON,
+    RENAME_TIMEOUT_REASON,
+)
 from app.domain.automation_subscription import effective_season, subscription_options
 
 
@@ -54,7 +60,14 @@ class AutomationOperations:
     async def _download(self, release_id, subscription_id, confirm, episode=None, season=None):
         release, rule = self.release(release_id), self.rule(subscription_id)
         analysis = dict(release.parsed)
-        if episode is not None:
+        is_batch = "MULTI_EPISODE_RELEASE" in analysis.get("warnings", [])
+        if {"INVALID_EPISODE_RANGE", "CROSS_SEASON_RELEASE"}.intersection(
+            analysis.get("warnings", [])
+        ):
+            raise DomainError("INVALID_BATCH_RANGE", "跨季或无效的合集范围，请先拆分或核对发布")
+        if is_batch and not subscription_options(rule)["allow_batch"]:
+            raise DomainError("BATCH_NOT_ALLOWED", "请先在追番规则中开启允许合集")
+        if episode is not None and not is_batch:
             analysis["episode"] = episode - rule.episode_offset
         if season is not None and season != effective_season(rule, analysis.get("season")):
             raise DomainError("SEASON_MISMATCH", "请先修改此规则的目标季度")
@@ -65,7 +78,7 @@ class AutomationOperations:
                 raise DomainError("EPISODE_REQUIRED", "请填写集号后确认，或先为规则启用合集")
         target_episode = (
             int(analysis["episode"]) + rule.episode_offset
-            if analysis.get("episode") is not None
+            if analysis.get("episode") is not None and not is_batch
             else None
         )
         if target_episode is not None and not 0 <= target_episode <= 999:
@@ -325,31 +338,62 @@ class AutomationOperations:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     os.link(source, target)
             else:
-                actual = {f["name"] for f in await client.files(job.torrent_hash)}
-                if operation.target_path in actual and operation.source_path not in actual:
-                    self.repo.update_operation(operation.id, "done")
-                    continue
-                if operation.source_path not in actual or target.exists():
-                    raise ValueError("文件状态与整理计划冲突")
-                self.repo.update_operation(operation.id, "running")
-                await client.rename_file(
-                    job.torrent_hash, operation.source_path, operation.target_path
-                )
-                actual = {f["name"] for f in await client.files(job.torrent_hash)}
-                if operation.target_path not in actual:
-                    raise ValueError("等待下载器确认重命名")
+                if not await self._confirm_or_rename(job, client, operation, source, target):
+                    return
             self.repo.update_operation(operation.id, "done")
         if not all(self._local(job, o.target_path).is_file() for o in operations):
-            self.repo.update_download(
-                job.id, state="waiting_files", error="等待媒体挂载目录出现文件"
+            self.repo.set_download_outcome(
+                job.id, "waiting_files", "queued", "等待媒体挂载目录出现文件"
             )
             return
         state = "revision_ready" if job.naming_json.get("revision_of") else "organized"
-        self.repo.update_download(job.id, state=state, error=None)
+        self.repo.set_download_outcome(job.id, state, "queued")
         import asyncio
 
         await asyncio.to_thread(self.service._catalog.list_media)
         self.repo.add_event("organized", f"任务 #{job.id} 已整理", download_id=job.id)
+
+    async def _confirm_or_rename(self, job, client, operation, source, target) -> bool:
+        """Reconcile a persisted intent before sending any rename request.
+
+        qB acknowledges renameFile before its file list necessarily reflects the rename.
+        Keep running operations pending across polls/restarts, not repeated mutations.
+        """
+        actual = {f["name"] for f in await client.files(job.torrent_hash)}
+        if operation.target_path in actual and operation.source_path not in actual:
+            return True
+        if operation.source_path not in actual or operation.target_path in actual:
+            raise ValueError("文件状态与整理计划冲突")
+        if operation.state == "done":
+            raise ValueError("已确认的文件名发生变化，请人工核对整理计划")
+        if operation.state == "running":
+            # The filesystem may reflect the rename before qB's file-list cache does.
+            if target.exists() and source.exists():
+                raise ValueError("文件状态与整理计划冲突")
+            started = operation.updated_at.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            if elapsed >= RENAME_CONFIRMATION_TIMEOUT_SECONDS:
+                self.repo.update_operation(operation.id, "failed", RENAME_TIMEOUT_REASON)
+                raise ValueError(RENAME_TIMEOUT_REASON)
+        else:
+            if target.exists():
+                raise ValueError("文件状态与整理计划冲突")
+            # Persist before I/O: even a lost HTTP response must not resend blindly.
+            self.repo.update_operation(operation.id, "running")
+            await client.rename_file(job.torrent_hash, operation.source_path, operation.target_path)
+            actual = {f["name"] for f in await client.files(job.torrent_hash)}
+            if operation.target_path in actual and operation.source_path not in actual:
+                return True
+            if operation.source_path not in actual or operation.target_path in actual:
+                raise ValueError("文件状态与整理计划冲突")
+        self.repo.set_download_outcome(
+            job.id, "waiting_rename", "waiting_rename", RENAME_PENDING_REASON
+        )
+        if job.error != RENAME_PENDING_REASON:
+            self.repo.add_event(
+                "rename_pending", f"任务 #{job.id}：{RENAME_PENDING_REASON}", download_id=job.id
+            )
+        return False
 
     async def restore(self, job, confirm: bool):
         if self.documents.get(f"automation:revision:{job.id}") or job.state == "superseded":
@@ -364,6 +408,10 @@ class AutomationOperations:
                 ],
                 "executed": False,
             }
+        if any(operation.state == "running" for operation in operations):
+            raise DomainError(
+                "RENAME_PENDING", "重命名仍待确认，请先继续整理确认结果，再恢复原名称", 409
+            )
         client = self.service.downloader(job)
         for operation in reversed(operations):
             if operation.source_path == operation.target_path:

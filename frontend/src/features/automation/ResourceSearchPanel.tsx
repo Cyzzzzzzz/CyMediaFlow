@@ -24,11 +24,12 @@ export function ReleaseReviewDialog({
     release.analysis.episode,
   );
   const selected = rules.data?.find((r) => r.id === ruleId);
+  const isBatch = release.analysis.warnings?.includes("MULTI_EPISODE_RELEASE") ?? false;
   const preview = useMutation({
-    mutationFn: () => featureApi.download(release.id, ruleId, false, episode),
+    mutationFn: () => featureApi.download(release.id, ruleId, false, isBatch ? null : episode),
   });
   const download = useMutation({
-    mutationFn: () => featureApi.download(release.id, ruleId, true, episode),
+    mutationFn: () => featureApi.download(release.id, ruleId, true, isBatch ? null : episode),
     onSuccess: () => client.invalidateQueries({ queryKey: ["automation"] }),
   });
   const suggest = useMutation({
@@ -68,7 +69,7 @@ export function ReleaseReviewDialog({
             ))}
           </select>
         </label>
-        <label>
+        {!isBatch ? <label>
           目标集号（Emby）
           <input
             type="number"
@@ -80,23 +81,25 @@ export function ReleaseReviewDialog({
               preview.reset();
             }}
           />
-        </label>
+        </label> : null}
         <p className="automation-note">
-          {selected?.allow_batch
-            ? "合集按下载后的每个视频分别映射，请检查文件级预览。"
+          {isBatch
+            ? selected?.allow_batch
+              ? "合集按下载后的每个视频分别映射，请检查文件级预览。"
+              : "请先在追番规则中开启允许合集，再预览下载。"
             : "请核对目标季度与集号，手动确认会使用这条规则的目录和下载器。"}
         </p>
         <div className="automation-actions">
           <button
             className="secondary-button"
-            disabled={!ruleId || preview.isPending}
+            disabled={!ruleId || preview.isPending || (isBatch && !selected?.allow_batch)}
             onClick={() => preview.mutate()}
           >
             预览下载
           </button>
           <button
             className="quiet-button"
-            disabled={suggest.isPending}
+            disabled={suggest.isPending || isBatch}
             onClick={() => suggest.mutate()}
           >
             辅助解析
@@ -127,8 +130,8 @@ export function ReleaseReviewDialog({
         {preview.data ? (
           <div className="automation-preview">
             <p>
-              {preview.data.target_title} · S{preview.data.season}E
-              {preview.data.episode ?? "合集"}
+              {preview.data.target_title} · S{preview.data.season}
+              {preview.data.episode === null ? " · 合集（逐文件映射）" : `E${preview.data.episode}`}
             </p>
             {preview.data.existing_job ? (
               <p>已有任务 #{preview.data.existing_job}</p>

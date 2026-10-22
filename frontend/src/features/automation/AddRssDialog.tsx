@@ -44,6 +44,7 @@ export function AddRssDialog({ onClose, onSuccess }: { onClose: () => void; onSu
         {analyze.data?.truncated ? <p className="automation-note">本次只显示前 30 组，请使用更具体的 RSS 地址筛选。</p> : null}
         {candidates.length > 1 ? <div className="subscription-candidate-list" aria-label="解析出的追番规则">{candidates.map((candidate, index) => <div key={index} className={index === active ? "selected" : ""}>{aggregate ? <input type="checkbox" aria-label={`订阅 ${candidate.rule.source_title} ${candidate.rule.preferred_group ?? ""}`} checked={selected.includes(index)} onChange={(e) => setSelected(e.target.checked ? [...selected, index] : selected.filter((id) => id !== index))} /> : <input type="radio" name="rss-rule" aria-label={`订阅 ${candidate.rule.source_title} ${candidate.rule.preferred_group ?? ""}`} checked={selected.includes(index)} onChange={() => { setSelected([index]); setActive(index); }} />}<button type="button" onClick={() => { setActive(index); if (!aggregate) setSelected([index]); }}><strong>{candidate.rule.title}</strong><span>Season {candidate.rule.season} · {candidate.rule.preferred_group ?? "未知字幕组"} · {candidate.rule.preferred_resolution ?? "未知清晰度"} · {candidate.entry_count} 条</span></button></div>)}</div> : null}
         {current ? <>
+          {current.batch_count ? <p className="automation-note" role="status">识别到 {current.batch_count} 条合集{current.episode_ranges?.length ? `：${current.episode_ranges.map((range) => `${range.season === null ? "" : `S${String(range.season).padStart(2, "0")}`}E${String(range.start).padStart(2, "0")}–E${String(range.end).padStart(2, "0")}`).join("、")}` : ""}。{current.rule.allow_batch ? "已为本次草稿开启允许合集，可在高级设置关闭；下载后按每个视频的集号整理。" : "当前未允许合集，此类发布不会自动下载；可在高级设置开启。"}范围不代表季度总集数。</p> : null}
           {current.warning ? <p className="automation-note" role="status">{current.warning}</p> : null}
           <SubscriptionFields key={active} value={current.rule} matches={current.matches} onChange={(value) => setCandidates((old) => old.map((item, index) => index === active ? { ...item, rule: value } : item))} />
           <details className="subscription-section subscription-examples"><summary>发布样本 <span>{current.entry_count} 条</span></summary><div className="subscription-section-body">
@@ -51,7 +52,7 @@ export function AddRssDialog({ onClose, onSuccess }: { onClose: () => void; onSu
             {current.examples.map((example) => <p key={example}>{example}</p>)}
           </div></details>
           <p className="automation-note">确认后保存 RSS 和规则；启用自动追番时，下一轮检查会下载源内所有匹配且尚未提交的发布。多字幕组规则会分别生效，请只选择需要的版本。</p>
-        </> : <div className="page-state">没有识别到可订阅的单集发布。可返回检查地址，或在 RSS 页保存源后手动添加追番规则。</div>}
+        </> : <div className="page-state">没有识别到可安全订阅的发布。支持单集及同季明确集数范围的合集；跨季或集号不明的资源请在 RSS 页保存源后手动检查。</div>}
       </>}
     </fieldset>
     {error ? <p role="alert" className="automation-note error">{error.message}</p> : null}

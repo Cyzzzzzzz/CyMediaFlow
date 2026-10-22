@@ -101,7 +101,7 @@ function DownloadsPanel({ ruleId, onClear }: { ruleId: number | null; onClear: (
     {ruleId !== null ? <p className="automation-note">只显示规则 #{ruleId} 的任务 <button type="button" className="quiet-button" onClick={onClear}>查看全部</button></p> : null}
     {sync.isError ? <p role="alert" className="automation-note error">{sync.error.message}</p> : null}
     {retry.isError ? <p role="alert" className="automation-note error">{retry.error.message}</p> : null}
-    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "submitted" && !job.torrent_hash ? "等待确认" : downloadLabels[job.state] ?? job.state}</span>{!job.torrent_hash && ["retry", "missing"].includes(job.state) ? <button type="button" className="secondary-button" disabled={sync.isPending || retry.isPending} onClick={() => retry.mutate(job.id)}>{retry.isPending && retry.variables === job.id ? "重试中…" : "重试添加"}</button> : null}<DownloadActions job={job} /></article>)}</div>
+    <div className="automation-card-list">{downloads.data?.filter((job) => ruleId === null || job.subscription_id === ruleId).map((job) => <article className="automation-card" key={job.id}><div><strong>{releases.data?.find((release) => release.id === job.release_id)?.title ?? `任务 #${job.id}`}</strong><span>{job.save_path}</span>{job.state === "waiting_rename" ? <small className="automation-note">{job.error || "等待下载器确认重命名，将自动复查，无需人工审核"}</small> : job.error ? <small className="automation-note error">{job.error}</small> : null}</div><span className={`automation-pill ${job.state === "organized" ? "ok" : ""}`}>{job.state === "downloading" ? `下载中 ${job.progress}%` : job.state === "submitted" && !job.torrent_hash ? "等待确认" : downloadLabels[job.state] ?? job.state}</span>{!job.torrent_hash && ["retry", "missing"].includes(job.state) ? <button type="button" className="secondary-button" disabled={sync.isPending || retry.isPending} onClick={() => retry.mutate(job.id)}>{retry.isPending && retry.variables === job.id ? "重试中…" : "重试添加"}</button> : null}<DownloadActions job={job} /></article>)}</div>
     <OrphanTasks />
     {!downloads.data?.some((job) => ruleId === null || job.subscription_id === ruleId) ? <div className="page-state">还没有自动下载任务。</div> : null}
   </section>;
@@ -110,12 +110,12 @@ function DownloadsPanel({ ruleId, onClear }: { ruleId: number | null; onClear: (
 const downloadLabels: Record<string, string> = {
   paused: "已暂停", checking: "校验中", removed: "已移除", superseded: "旧版已备份", revision_ready: "新版待替换",
   planned: "待提交", confirming: "等待确认", submitted: "已确认创建", retry: "添加失败",
-  missing: "未找到任务", retry_sync: "同步失败", waiting_files: "等待文件", organizing: "整理中", organized: "已整理", review: "待审核",
+  missing: "未找到任务", retry_sync: "同步失败", waiting_files: "等待文件", waiting_rename: "等待改名确认", organizing: "整理中", organized: "已整理", review: "待审核",
 };
 const decisionLabels: Record<string, string> = {
   excluded: "手动排除",
   new: "待分析", ready: "已匹配", skipped: "已跳过", review: "待审核", queued: "已确认创建",
-  confirming: "等待确认", retry: "添加失败", missing: "未找到任务",
+  confirming: "等待确认", retry: "添加失败", missing: "未找到任务", waiting_rename: "等待改名确认",
 };
 
 function ReleasesPanel() {
@@ -129,9 +129,9 @@ function ReleasesPanel() {
   return <section className="automation-panel">
     <div className="automation-panel-head"><div><h2>发布候选</h2><p>保留最近 100 条解析结果；跳过和待审核的原因在这里查看。</p></div><select aria-label="筛选 RSS 源" value={feedId} onChange={(event) => setFeedId(Number(event.target.value))}><option value={0}>全部 RSS</option>{feeds.data?.map((feed) => <option key={feed.id} value={feed.id}>{feed.name}</option>)}</select></div>
     <div className="automation-card-list">{visible?.map((release) => <article className="automation-card" key={release.id}>
-      <div><strong>{release.title}</strong><span>{feeds.data?.find((feed) => feed.id === release.feed_id)?.name ?? "未知 RSS"} · {release.analysis.title ?? "标题未识别"} · {release.analysis.episode !== null ? `E${release.analysis.episode}` : "集号未识别"} · 可信度 {release.analysis.confidence}%</span>{release.reason ? <small className="automation-note">{release.reason}</small> : null}</div>
+      <div><strong>{release.title}</strong><span>{feeds.data?.find((feed) => feed.id === release.feed_id)?.name ?? "未知 RSS"} · {release.analysis.title ?? "标题未识别"} · {release.analysis.episode !== null ? `E${release.analysis.episode}` : "集号未识别"} · 可信度 {release.analysis.confidence}%</span>{release.decision === "waiting_rename" ? <small className="automation-note">{release.reason || "等待下载器确认重命名，将自动复查，无需人工审核"}</small> : release.reason ? <small className="automation-note">{release.reason}</small> : null}</div>
       <span className={`automation-pill ${release.decision === "queued" ? "ok" : ""}`}>{decisionLabels[release.decision] ?? release.decision}</span>
-      <button className="secondary-button" onClick={() => setReview(release)}>审核 / 下载</button><button className="quiet-button" disabled={skip.isPending} onClick={() => skip.mutate(release.id)}>排除</button>
+      {release.decision !== "waiting_rename" ? <button className="secondary-button" onClick={() => setReview(release)}>审核 / 下载</button> : null}<button className="quiet-button" disabled={skip.isPending} onClick={() => skip.mutate(release.id)}>排除</button>
     </article>)}</div>
     {releases.isLoading ? <div className="page-state">正在读取发布候选…</div> : !visible?.length ? <div className="page-state">还没有发布候选。请先刷新 RSS。</div> : null}
     {review ? <ReleaseReviewDialog release={review} onClose={() => setReview(null)} /> : null}

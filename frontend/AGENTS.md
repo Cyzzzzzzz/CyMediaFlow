@@ -10,6 +10,8 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Durable prototype design feedback
 
+- Keep the broadcast calendar compact: use fixed 48 × 72 px thumbnails beside titles, never full-column posters. Preserve weekday grouping and rule editing; shrink the number of columns on narrow screens without enlarging the thumbnails. The subscription poster shelf and editor artwork must retain their existing sizes.
+
 - AutoBangumi opens on a subscribed-anime poster shelf, not a rules dashboard. Keep a prominent "新增 RSS 订阅" action; analyze RSS before confirming subscriptions. Clicking a poster and editing from the rules sub-tab must open the same right-side editor, with title/year/season visible and filtering/offset/download preferences collapsed. Group multiple rules for one title/season behind one poster. Preserve the separate local-media homepage.
 - Show AutoBangumi exclusion keywords as editable tags: Enter adds, clicking a tag edits, and × removes; preserve IME input. Keep per-rule keywords inside collapsed advanced settings and global defaults in the existing AutoBangumi settings section. Defaults prefill new rules only; they must not overwrite saved rules.
 

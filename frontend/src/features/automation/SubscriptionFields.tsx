@@ -39,7 +39,8 @@ export function SubscriptionFields({ value, onChange, localPoster, matches = [] 
     <details className="subscription-section">
       <summary>高级设置 <span>过滤 · 偏移 · 下载偏好</span></summary>
       <div className="subscription-section-body">
-        <label>下载目录名<input value={value.folder_name} onChange={(e) => set("folder_name", e.target.value)} placeholder="留空使用作品标题" maxLength={180} /></label>
+        <label>下载目录名<input value={value.folder_name} onChange={(e) => set("folder_name", e.target.value)} placeholder="留空使用作品标题" maxLength={180} aria-describedby="subscription-folder-scope" /></label>
+        <p id="subscription-folder-scope" className="automation-note">目录、命名与季集偏移修改仅用于后续新建任务。已有任务（含重试）保留提交时的配置，不会自动迁移文件。</p>
         <div className="automation-form-grid"><label>内容类型<select value={value.content_kind ?? "series"} onChange={e => onChange({ ...value, content_kind: e.target.value as SubscriptionDraft["content_kind"], season: e.target.value === "series" ? value.season : 0 })}><option value="series">普通剧集</option><option value="movie">剧场版</option><option value="special">OVA / SP</option></select></label><label>下载器<select value={value.downloader ?? "qbittorrent"} onChange={e => set("downloader", e.target.value as SubscriptionDraft["downloader"])}><option value="qbittorrent">qBittorrent</option><option value="aria2">aria2</option></select></label></div>
         <div className="automation-form-grid"><label>首集编号<input type="number" min={0} max={999} value={value.first_episode ?? 1} onChange={e => set("first_episode", Number(e.target.value))} /></label><label>预计总集数<input type="number" min={1} max={999} value={value.expected_episodes ?? ""} placeholder="未知" onChange={e => set("expected_episodes", e.target.value ? Number(e.target.value) : null)} /></label></div>
         <label className="automation-check"><input type="checkbox" checked={value.allow_batch ?? false} onChange={e => set("allow_batch", e.target.checked)} />允许合集（下载后逐文件核对剧集）</label>

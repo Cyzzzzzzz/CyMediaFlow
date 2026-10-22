@@ -32,12 +32,15 @@ export type FeedCandidate = {
   rule: SubscriptionDraft; entry_count: number; examples: string[];
   matches: SubscriptionMatch[]; warning: string | null;
   versions?: number[]; subtitle_variants?: (string | null)[];
+  batch_count?: number;
+  episode_ranges?: { season: number | null; start: number; end: number }[];
 };
 export type FeedAnalysis = {
   candidates: FeedCandidate[]; total_entries: number; unrecognized: number; truncated: boolean;
 };
 export type ReleaseAnalysis = {
   title: string | null; season: number | null; episode: number | null;
+  episode_end?: number | null;
   group: string | null; resolution: string | null; confidence: number; warnings: string[];
   version?: number | null; subtitle?: string | null;
 };

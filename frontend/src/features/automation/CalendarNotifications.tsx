@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { featureApi } from "./featureApi";
 import { SubscriptionPoster } from "./SubscriptionPoster";
 import type { Subscription } from "./types";
+import "./calendar.css";
 
 export function useAutomationEvents() {
   const client = useQueryClient();
@@ -62,14 +63,17 @@ export function CalendarPanel({
       <div className="automation-calendar">
         {["周一", "周二", "周三", "周四", "周五", "周六", "周日", "待定"].map(
           (day, index) => (
-            <section key={day}>
-              <h3>{day}</h3>
+            <section key={day} aria-labelledby={`calendar-day-${index}`}>
+              <h3 id={`calendar-day-${index}`}>{day}</h3>
               {calendar.data?.items
                 .filter((r) => (r.air_weekday ?? 7) === index)
                 .map((rule) => (
                   <button
+                    type="button"
                     className="calendar-anime"
                     key={rule.id}
+                    aria-label={`编辑追番规则：${rule.title}`}
+                    title={rule.title}
                     onClick={() => onEdit(rule)}
                   >
                     <SubscriptionPoster
@@ -77,7 +81,7 @@ export function CalendarPanel({
                       url={rule.poster_url}
                       localUrl={rule.local_poster_url}
                     />
-                    <span>{rule.title}</span>
+                    <span className="calendar-anime-title">{rule.title}</span>
                   </button>
                 ))}
             </section>

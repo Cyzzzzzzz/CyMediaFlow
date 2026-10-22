@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 
 from app.domain.automation_subscription import effective_season, subscription_options
 from app.domain.filename import ParsedMediaInfo
-from app.domain.filename_parser import FilenameParser
+from app.domain.filename_parser import SEASON_EPISODE, FilenameParser
 
 VIDEO_SUFFIXES = frozenset({".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts", ".webm"})
 SUBTITLE_SUFFIXES = frozenset({".ass", ".ssa", ".srt", ".vtt"})
@@ -28,12 +28,14 @@ class ReleaseAnalysis:
     version: int | None = None
     aliases: tuple[str, ...] = ()
     media_type: str = "series"
+    episode_end: int | None = None
 
     def json(self) -> dict:
         return {
             "title": self.title,
             "season": self.season,
             "episode": self.episode,
+            "episode_end": self.episode_end,
             "group": self.group,
             "resolution": self.resolution,
             "confidence": self.confidence,
@@ -60,6 +62,9 @@ def analyze_release(title: str) -> ReleaseAnalysis:
     )
     if episode is None and parsed.special_number is not None:
         episode = parsed.special_number
+    episode_end = (
+        parsed.episode_end if parsed.episode_end is not None else parsed.absolute_episode_end
+    )
     warnings = list(parsed.warnings)
     if parsed.episode_end is not None and parsed.episode_start != parsed.episode_end:
         warnings.append("MULTI_EPISODE_RELEASE")
@@ -68,6 +73,14 @@ def analyze_release(title: str) -> ReleaseAnalysis:
         and parsed.absolute_episode_start != parsed.absolute_episode_end
     ):
         warnings.append("MULTI_EPISODE_RELEASE")
+    if episode_end is not None and episode is not None and not 0 <= episode <= episode_end <= 999:
+        warnings.append("INVALID_EPISODE_RANGE")
+    seasons = {
+        int(match.group("season"))
+        for match in SEASON_EPISODE.finditer(unicodedata.normalize("NFKC", title))
+    }
+    if len(seasons) > 1:
+        warnings.append("CROSS_SEASON_RELEASE")
     return ReleaseAnalysis(
         aliases[0] if aliases else parsed.title,
         parsed.season,
@@ -88,6 +101,7 @@ def analyze_release(title: str) -> ReleaseAnalysis:
             if parsed.special_type
             else "series"
         ),
+        episode_end,
     )
 
 
@@ -109,6 +123,10 @@ def match_subscription(analysis: ReleaseAnalysis, rule: object, raw_title: str) 
     options = subscription_options(rule)
     if options["archived"]:
         return "订阅已归档"
+    if "CROSS_SEASON_RELEASE" in analysis.warnings:
+        return "跨季合集需要拆分或手动映射"
+    if "INVALID_EPISODE_RANGE" in analysis.warnings:
+        return "发布集数范围无效，请人工核对"
     single_movie = options["content_kind"] == "movie" and analysis.media_type == "movie"
     batch = options["allow_batch"] and "MULTI_EPISODE_RELEASE" in analysis.warnings
     if (analysis.episode is None and not single_movie and not batch) or analysis.title is None:

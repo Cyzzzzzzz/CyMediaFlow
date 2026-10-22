@@ -379,6 +379,10 @@ class AutomationService:
                     "confirming",
                 }
                 continue
+            # Explicit RSS refresh upgrades cached analysis before first submission.
+            # Existing task naming snapshots remain unchanged.
+            self._repo.update_release_analysis(release.id, analysis.json())
+            release = self._repo.get_release(release.id)
             matches = [
                 rule for rule in rules if match_subscription(analysis, rule, entry.title) is None
             ]
@@ -427,8 +431,9 @@ class AutomationService:
     ) -> bool:
         season = effective_season(rule, release.parsed.get("season"))
         options = subscription_options(rule)
-        episode = release.parsed.get("episode")
-        if episode is None and options["content_kind"] == "movie":
+        is_batch = "MULTI_EPISODE_RELEASE" in release.parsed.get("warnings", [])
+        episode = None if is_batch else release.parsed.get("episode")
+        if episode is None and not is_batch and options["content_kind"] == "movie":
             episode = 1 - rule.episode_offset
         previous = None
         if self.operations:
@@ -473,6 +478,7 @@ class AutomationService:
                 "episode": int(episode) + rule.episode_offset if episode is not None else None,
                 "episode_offset": rule.episode_offset,
                 "allow_batch": options["allow_batch"],
+                "is_batch": is_batch,
                 "downloader": options["downloader"],
                 "version": release.parsed.get("version") or 1,
                 "revision_of": previous.id if previous else None,
@@ -612,6 +618,16 @@ class AutomationService:
 
     async def _sync_downloads(self) -> None:
         for job in self._repo.list_pending_downloads():
+            if job.state in {"organized", "revision_ready"}:
+                # Older versions completed the job but left its candidate in review.
+                # The persisted completion is authoritative; never replay its file plan.
+                self._repo.set_download_outcome(job.id, job.state, "queued")
+                self._repo.add_event(
+                    "candidate_reconciled",
+                    f"任务 #{job.id} 已完成，已清除候选的旧重命名审核状态",
+                    download_id=job.id,
+                )
+                continue
             release = self._repo.get_release(job.release_id)
             rule = self._repo.get_subscription(job.subscription_id)
             feed = self._repo.get_feed(release.feed_id) if release else None
@@ -694,8 +710,7 @@ class AutomationService:
                 self._repo.update_download(job.id, state="retry_sync", error="下载器状态同步失败")
 
     def _review(self, job: object, reason: str) -> None:
-        self._repo.update_download(job.id, state="review", error=reason)
-        self._repo.set_release_decision(job.release_id, "review", reason)
+        self._repo.set_download_outcome(job.id, "review", "review", reason)
         self._repo.add_event("review", f"任务 #{job.id}：{reason}", download_id=job.id)
 
     async def _organize(self, job: object, torrent_hash: str, qb: QbittorrentClient) -> None:

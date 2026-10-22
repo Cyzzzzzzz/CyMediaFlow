@@ -67,6 +67,61 @@ describe("AutomationPage", () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/downloads/7/retry"))).toHaveLength(1);
   });
 
+  it.each([
+    { revisionOf: null, finalState: "organized", finalLabel: "已整理" },
+    { revisionOf: 3, finalState: "revision_ready", finalLabel: "新版待替换" },
+  ])("reconciles pending rename without review or unsafe file actions ($finalState)", async ({ revisionOf, finalState, finalLabel }) => {
+    const user = userEvent.setup();
+    const pendingReason = "等待下载器确认重命名，将自动复查，无需人工审核";
+    let confirmed = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/downloads/4/action")) {
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({ action: "organize", confirm: false });
+        confirmed = true;
+        return response({ files: [], executed: true, state: finalState });
+      }
+      if (url.endsWith("/downloads")) return response([{
+        id: 4, release_id: 7, subscription_id: 1, state: confirmed ? finalState : "waiting_rename",
+        torrent_hash: "hash", progress: 100, save_path: "/downloads/Hero/Season 1",
+        error: confirmed ? null : pendingReason,
+        naming: { title: "Hero", season: 1, episode: 3, downloader: "qbittorrent", revision_of: revisionOf },
+      }]);
+      if (url.endsWith("/releases")) return response([{
+        id: 7, feed_id: 1, title: "[ANi] Hero 03",
+        analysis: { title: "Hero", episode: 3, season: 1, group: "ANi", resolution: "1080p", confidence: 90, warnings: [] },
+        decision: confirmed ? "queued" : "waiting_rename", reason: confirmed ? null : pendingReason,
+      }]);
+      return response([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mount();
+
+    await user.click(screen.getByRole("tab", { name: "发布候选" }));
+    expect(await screen.findByText("等待改名确认")).toBeTruthy();
+    expect(screen.getByText(pendingReason, { exact: true }).classList.contains("error")).toBe(false);
+    expect(screen.queryByText("待审核")).toBeNull();
+    expect(screen.queryByRole("button", { name: "审核 / 下载" })).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "下载任务" }));
+    expect(await screen.findByText("等待改名确认")).toBeTruthy();
+    expect(screen.getByText(pendingReason, { exact: true }).classList.contains("error")).toBe(false);
+    await user.click(screen.getByText("操作"));
+    for (const name of ["文件映射与预览", "恢复原名称", "替换预览", "恢复旧版", "继续整理"])
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重新确认" }));
+    expect(await screen.findByText(finalLabel)).toBeTruthy();
+    expect(screen.queryByText(/等待下载器确认重命名/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新确认" })).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "发布候选" }));
+    expect(await screen.findByText("已确认创建")).toBeTruthy();
+    expect(screen.queryByText("等待改名确认")).toBeNull();
+    expect(screen.queryByText(/等待下载器确认重命名/)).toBeNull();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/downloads/4/action"))).toHaveLength(1);
+  });
+
   it("prefills new rules from settings and persists tag edits through the shared editor", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
