@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from app.application.rss_errors import rss_failure
 from app.core.errors import DomainError
 from app.core.path_safety import path_is_within
 from app.domain.automation import (
@@ -328,8 +329,9 @@ class AutomationService:
         try:
             entries = await self._rss.fetch(feed.url)
         except Exception as exc:
-            self._repo.update_feed_status(feed_id, "error", "连接或 XML 解析失败")
-            raise DomainError("RSS_UNAVAILABLE", "RSS 连接或 XML 解析失败", 503) from exc
+            error = rss_failure(exc)
+            self._repo.update_feed_status(feed_id, "error", error.message)
+            raise error from exc
         self._repo.update_feed_status(feed_id, "connected", None)
         return [
             {"title": entry.title, "analysis": analyze_release(entry.title).json()}
@@ -347,10 +349,11 @@ class AutomationService:
         try:
             entries = await self._rss.fetch(feed.url)
         except Exception as exc:
-            self._repo.update_feed_status(feed.id, "error", "连接或 XML 解析失败")
-            self._repo.add_event("rss_error", f"{feed.name}：RSS 连接或解析失败", feed_id=feed.id)
+            error = rss_failure(exc)
+            self._repo.update_feed_status(feed.id, "error", error.message)
+            self._repo.add_event("rss_error", f"{feed.name}：{error.message}", feed_id=feed.id)
             logger.warning("RSS fetch failed for feed %s: %s", feed.id, type(exc).__name__)
-            raise DomainError("RSS_UNAVAILABLE", "RSS 连接或 XML 解析失败", 503) from exc
+            raise error from exc
         self._repo.update_feed_status(feed.id, "connected", None)
         rules = [
             rule

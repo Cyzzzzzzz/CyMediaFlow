@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ApiError } from "../../api/client";
 import { automationApi } from "./api";
 import { AutomationDialog } from "./AutomationDialog";
 import { SubscriptionFields } from "./SubscriptionFields";
@@ -55,6 +56,6 @@ export function AddRssDialog({ onClose, onSuccess }: { onClose: () => void; onSu
         </> : <div className="page-state">没有识别到可安全订阅的发布。支持单集及同季明确集数范围的合集；跨季或集号不明的资源请在 RSS 页保存源后手动检查。</div>}
       </>}
     </fieldset>
-    {error ? <p role="alert" className="automation-note error">{error.message}</p> : null}
+    {error ? <p role="alert" className="automation-note error">{error.message}{error instanceof ApiError && error.requestId ? <span className="automation-error-id">请求编号：{error.requestId} · <a href={`/api/v1/system/error-logs?request_id=${encodeURIComponent(error.requestId)}`} target="_blank" rel="noopener noreferrer">查看异常日志</a></span> : null}</p> : null}
   </AutomationDialog>;
 }

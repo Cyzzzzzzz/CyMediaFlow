@@ -419,6 +419,10 @@ GitHub Actions 会验证 Python 3.10 后端测试并构建 linux/amd64 前后端
 
 ### 常见问题
 
+**RSS 或 API 报错，需要查看具体原因**
+
+访问 `GET /api/v1/system/error-logs`，支持按 `request_id`、`code`、`level` 查询；启用登录后需管理员权限。新增 RSS 弹窗的错误下方提供请求编号和日志链接。只持久化异常摘要，最近 1000 条，重启保留，不记录 Token／私有订阅地址等原文。详见 [异常日志与 RSS 排障](docs/error-logs.md)。
+
 **后端不断重启并显示 unhealthy**
 
 ```bash
@@ -455,12 +459,15 @@ docker-compose exec backend ffprobe -version
 - [NAS 预构建镜像部署与更新](docs/nas-prebuilt-deployment.md)
 - [复用 NAS 基础镜像本地构建与更新](docs/nas-local-build-deployment.md)
 - [开发日志](docs/development-log.md)
+- [异常日志与 RSS 排障](docs/error-logs.md)
 - [AutoBangumi 订阅与规则](docs/autobangumi-subscriptions.md)
 - [AutoBangumi P1/P2/P3 功能与升级说明](docs/autobangumi-p1-p2-p3.md)
 
 ---
 
 ## English
+
+Error diagnostics: `GET /api/v1/system/error-logs` provides persistent, paginated exception summaries filtered by `request_id`, `code`, or `level`. Admin access is required when authentication is enabled. The RSS dialog links failures to their request logs. History is capped at 1,000 entries; credentials, full URLs, request bodies, and raw exception messages are not stored. See [diagnostic API and RSS troubleshooting](docs/error-logs.md).
 
 ### Overview
 

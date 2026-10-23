@@ -4,6 +4,7 @@ import asyncio
 
 from app.application.automation_service import AutomationService, public_feed, public_subscription
 from app.application.ports import MetadataProviderPort
+from app.application.rss_errors import rss_failure
 from app.core.errors import DomainError
 from app.domain.automation import analyze_release, normalized_title
 from app.infrastructure.automation.rss import validate_feed_url
@@ -52,9 +53,7 @@ class AutomationSubscriptionService:
         try:
             entries = await asyncio.wait_for(self._automation._rss.fetch(url), timeout=25)
         except Exception as exc:
-            raise DomainError(
-                "RSS_UNAVAILABLE", "RSS 连接或解析失败，请检查地址及 RSS 代理", 503
-            ) from exc
+            raise rss_failure(exc) from exc
         grouped: dict[tuple, dict] = {}
         default_excludes = self._automation.default_exclude_keywords()
         unrecognized = 0

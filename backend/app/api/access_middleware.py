@@ -46,6 +46,7 @@ async def access_middleware(request, call_next):
         ("/settings" in path and (write or path == "/api/v1/settings"))
         or path.startswith("/api/v1/auth/users")
         or path == "/api/v1/auth/passkeys/config"
+        or path == "/api/v1/system/error-logs"
     )
     if admin_path and (user["role"] != "admin" or user["scope"] != "all"):
         return reject("ADMIN_REQUIRED", "此操作需要管理员权限")
